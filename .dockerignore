@@ -1,0 +1,22 @@
+# Entornos virtuales — nunca van en la imagen
+modulo3_quality_pipeline/.venv/
+fe-chatbot-ai/venv/
+be-chatbot-ai/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Artefactos generados — se montan como volúmenes
+modulo3_quality_pipeline/chroma_db_m3/
+modulo3_quality_pipeline/output/*.json
+modulo3_quality_pipeline/output/*.html
+
+# Secretos — se pasan vía env_file en docker-compose
+modulo3_quality_pipeline/.env
+be-chatbot-ai/.env
+fe-chatbot-ai/.env
+
+# IDE y sistema
+.DS_Store
+**/.DS_Store
+.git/

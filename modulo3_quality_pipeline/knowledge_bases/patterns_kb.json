@@ -1,0 +1,175 @@
+[
+  {
+    "id": "PTN-001",
+    "domain": "authentication",
+    "katary_context": "Login a sistemas internos donde la identificación puede hacerse por username o por email, con políticas de complejidad de password",
+    "ac_pattern_typical": "El sistema autentica usuarios validando credenciales (usuario o email + password) con políticas de seguridad",
+    "techniques_used": ["EP", "BVA", "Decision Tables"],
+    "typical_scenarios": [
+      "Login exitoso con credenciales válidas (positive)",
+      "Login soporta tanto username como email como identificador (positive)",
+      "Espacios al inicio/final del username o password — debe trimear o rechazar consistentemente (negative — bug clásico)",
+      "Caracteres especiales en password (ñ, tildes, símbolos unicode) — debe aceptarlos sin romper hash ni BD (boundary)",
+      "Password sin cumplir política de complejidad (falta números, letras o símbolos) — rechazo con mensaje específico (negative — EP por cada regla)",
+      "Más de N intentos fallidos consecutivos — bloqueo temporal o captcha (security)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en login en 19 años son: (1) espacios invisibles al inicio/final de username o password que el usuario no ve pero rompen el match; (2) caracteres especiales (ñ, tildes, emojis) que rompen validaciones o el almacenamiento; (3) ausencia de límite definido de intentos fallidos que abre la puerta a brute force; (4) inconsistencia cuando el sistema acepta tanto username como email pero cada uno tiene reglas distintas de validación."
+  },
+  {
+    "id": "PTN-002",
+    "domain": "form_validation",
+    "katary_context": "Formularios de creación/edición de entidades de negocio (clientes, productos, proyectos, empleados) con validaciones de presencia, formato, dependencias entre campos y unicidad",
+    "ac_pattern_typical": "El sistema valida los datos del formulario al enviar y rechaza con mensajes específicos cuando incumplen las reglas",
+    "techniques_used": ["EP", "BVA", "Decision Tables"],
+    "typical_scenarios": [
+      "Envío exitoso con todos los campos válidos (positive)",
+      "Campo obligatorio vacío — rechazo con mensaje específico de campo requerido (negative — EP)",
+      "Lista desplegable sin valores precargados (catálogo vacío) — debe mostrar mensaje claro o estado de carga (edge case)",
+      "Campo dependiente de otro que no se activa cuando el padre cambia de valor (Decision Tables aplica fuerte)",
+      "Fecha en formato incorrecto o imposible — 31 de febrero, DD-MM vs YYYY-MM (negative — EP por formato)",
+      "Submit doble por click rápido — debe prevenirse el duplicado (idempotencia)",
+      "Campo numérico que recibe letras o símbolos — rechazo con mensaje específico (negative — EP por tipo)",
+      "Texto pegado con longitud excesiva (>10k caracteres) — debe truncarse o rechazarse (boundary — BVA)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en formularios en 19 años son: (1) campos obligatorios sin validación visible — el usuario no sabe qué le falta hasta el submit; (2) listas desplegables que asumen datos precargados pero el catálogo está vacío en cliente nuevo; (3) campos condicionales que se activan por evento JS pero no por validación servidor — bug típico cuando el usuario manipula el form; (4) submit doble que crea registros duplicados — la idempotencia se subestima hasta que pasa en producción; (5) formato de fechas inconsistente entre frontend y backend que rompe en transición de timezone."
+  },
+  {
+    "id": "PTN-003",
+    "domain": "search_filtering",
+    "katary_context": "Pantallas de listado con búsqueda libre, filtros combinados y paginación, donde los clientes pueden tener desde decenas hasta cientos de miles de registros",
+    "ac_pattern_typical": "El sistema permite buscar y filtrar registros, los muestra paginados y devuelve resultados consistentes con los filtros aplicados",
+    "techniques_used": ["EP", "BVA", "Decision Tables"],
+    "typical_scenarios": [
+      "Búsqueda con resultados: filtros aplicados correctamente y paginación funcional (positive)",
+      "Filtros combinados (AND/OR) — la combinación produce los resultados correctos según la lógica de negocio (Decision Tables)",
+      "Búsqueda con caracteres especiales (tildes, ñ, comillas, símbolos) — debe normalizar y traer coincidencias relacionadas (negative — bug clásico)",
+      "Búsqueda case-insensitive — buscar 'GARCIA' debe encontrar 'García' y 'garcia' (negative — UX)",
+      "Búsqueda sin resultados — debe mostrar mensaje claro 'no se encontraron registros' y NO una pantalla en blanco que confunda al usuario (UX)",
+      "Cambio de filtros estando en página N — la paginación debe reiniciarse a página 1 (edge case)",
+      "Página fuera de rango (página 999 cuando solo hay 5) — debe mostrar última página o mensaje, no error (boundary — BVA)",
+      "Inputs maliciosos en búsqueda (caracteres SQL como ', --, OR 1=1) — debe sanitizar parámetros, no interpolar en query (security — SQL injection)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en búsqueda y paginación en 19 años son: (1) filtros que no se aplican o que pierden valor cuando se cambia de página — el SQL se arma sin todos los parámetros; (2) caracteres especiales y tildes que rompen la búsqueda porque no se hace normalización en BD ni en query; (3) case-sensitivity inesperada — el usuario busca 'pedro' y no encuentra 'Pedro'; (4) pantalla vacía sin mensaje cuando no hay resultados, generando duda de si el sistema está roto; (5) SQLs armados con concatenación de strings que abren la puerta a inyección — siempre usar parámetros preparados o ORM."
+  },
+  {
+    "id": "PTN-004",
+    "domain": "report_generation",
+    "katary_context": "Reportes contables, de tesorería, de gestión de proyectos y de nómina con totales, subtotales y agrupaciones, exportables a PDF y Excel",
+    "ac_pattern_typical": "El sistema genera reportes con datos filtrados por periodo o entidad, calcula totales y permite exportar a múltiples formatos",
+    "techniques_used": ["EP", "BVA"],
+    "typical_scenarios": [
+      "Reporte exitoso con datos en periodo válido (positive)",
+      "Reporte con periodo sin datos — debe mostrar reporte vacío con mensaje, no error (edge case)",
+      "Reporte con grandes volúmenes (>10k registros) — paginación de PDF y prevención de timeouts (boundary — BVA, performance)",
+      "Exportación a Excel preserva formato de números, fechas y monedas — los importes no se vuelven texto (negative — formato)",
+      "Totales y subtotales coinciden con la suma de los detalles — sin diferencias por redondeo (consistency)",
+      "Agrupaciones por múltiples niveles (centro de costo + cuenta + tercero) — orden y subtotales correctos (Decision Tables si hay reglas)",
+      "Reporte con periodo que cruza años fiscales — debe respetar cortes contables (edge case)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en reportes en 19 años son: (1) timeouts en reportes con volúmenes grandes — falta paginación en backend o queries no optimizados; (2) totales que no cuadran por errores de redondeo acumulados a nivel de línea; (3) exportación a Excel que pierde el formato de moneda y convierte números en texto; (4) fechas en zona horaria distinta del usuario que aparecen un día desfasadas en el reporte; (5) reportes contables que no respetan cortes de periodo cuando el rango cruza años fiscales."
+  },
+  {
+    "id": "PTN-005",
+    "domain": "file_upload",
+    "katary_context": "Carga de soportes (facturas escaneadas, contratos, comprobantes de pago, certificados) y archivos de importación masiva (Excel, CSV) en módulos de compras, RRHH y contabilidad",
+    "ac_pattern_typical": "El sistema permite cargar archivos, valida tipo MIME y tamaño, los procesa o almacena de manera segura",
+    "techniques_used": ["EP", "BVA", "Decision Tables"],
+    "typical_scenarios": [
+      "Carga exitosa de archivo dentro de tipo y tamaño permitidos (positive)",
+      "Tipo MIME no permitido (ej: .exe en campo de imagen) — rechazo con mensaje claro (negative — EP)",
+      "Tamaño superior al límite definido — rechazo antes de subir todo el archivo (boundary — BVA)",
+      "Nombre con caracteres especiales (ñ, tildes, espacios, emojis) — debe procesarse o normalizarse correctamente",
+      "Encoding distinto en CSV (UTF-8 vs Windows-1252 — Excel en español usa Windows-1252 por defecto) — debe detectarse o normalizarse (encoding)",
+      "Validación de tipo solo por extensión vs por contenido real (.exe renombrado a .pdf) — debe inspeccionar magic bytes (security)",
+      "Carga interrumpida por caída de conexión — debe permitir reintento sin duplicar registros (idempotencia)",
+      "Archivo Excel con celdas combinadas o fórmulas — debe parsearse o rechazarse con mensaje claro (edge case)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en carga de archivos en 19 años son: (1) encoding en CSV es la pesadilla número 1 en Colombia — Excel guarda en Windows-1252 por defecto y eso rompe los acentos al cargar; (2) validación de tipo solo por extensión que abre vulnerabilidades — siempre verificar magic bytes; (3) archivos grandes que rompen el navegador o el límite de upload del servidor sin mensaje claro; (4) nombres con caracteres especiales que rompen la persistencia o el download posterior; (5) reintentos sin idempotencia que duplican registros cuando el usuario presiona F5 al ver lentitud."
+  },
+  {
+    "id": "PTN-006",
+    "domain": "monetary_calculation",
+    "katary_context": "Cálculo de impuestos colombianos (IVA 19%, retención en la fuente, ICA, retenciones aplicables) en módulos de facturación, compras, contabilidad y nómina",
+    "ac_pattern_typical": "El sistema calcula valor base + impuestos + retenciones aplicables según tipo de transacción y devuelve totales auditables",
+    "techniques_used": ["EP", "BVA", "Decision Tables"],
+    "typical_scenarios": [
+      "Cálculo IVA básico sobre subtotal con tasa 19% (positive)",
+      "Item exento o excluido de IVA (alimentos básicos, salud, educación) — no debe calcular IVA (negative — EP)",
+      "Retención en la fuente aplica solo si supera UVT mínima vigente del año — combinación con tipo de proveedor (Decision Tables)",
+      "Descuentos previos al cálculo de IVA — la base imponible cambia según secuencia (negative — orden de operaciones)",
+      "Redondeo al peso colombiano (sin centavos) — verificar que totales línea por línea sumen exacto al gran total (boundary)",
+      "Múltiples ítems con distintas tasas de IVA en una misma factura — totales por tasa correctos (Decision Tables)",
+      "Operación en moneda extranjera — conversión a TRM del día con redondeo (edge case)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en cálculos monetarios en 19 años son: (1) redondeo es la pesadilla número 1 — pequeñas diferencias por línea se acumulan en totales que no cuadran con auditoría; (2) cambios anuales en normativa fiscal colombiana (UVT, tasas, exenciones) que rompen lógica hardcodeada — siempre parametrizar en BD; (3) decisión de aplicar IVA antes o después de descuentos — depende del tipo de descuento (comercial vs financiero) y muchos lo confunden; (4) retención en la fuente que no respeta el tope UVT y se aplica a todos los proveedores; (5) facturas con moneda extranjera que usan TRM equivocado o desactualizado."
+  },
+  {
+    "id": "PTN-007",
+    "domain": "pdf_generation",
+    "katary_context": "Generación de comprobantes de pago, facturas electrónicas (validadas con DIAN), certificaciones laborales, contratos y reportes formales con firma digital cuando aplica",
+    "ac_pattern_typical": "El sistema genera PDF con datos del registro, formato consistente, paginación correcta y firma digital cuando la regulación lo exige",
+    "techniques_used": ["EP", "BVA"],
+    "typical_scenarios": [
+      "PDF generado correctamente con todos los campos (positive)",
+      "Texto largo (descripción de >500 caracteres) que se desborda en celda — debe truncar o ajustar layout (boundary — BVA)",
+      "Caracteres especiales (ñ, tildes, símbolos como ©, €) que aparecen como ?? en el PDF (negative — encoding)",
+      "Documento de múltiples páginas — paginación correcta y totales en última página (edge case)",
+      "Firma digital aplicada y verificable en lectores PDF estándar (security — Colombia DIAN para FE)",
+      "Plantilla con cliente sin datos en algún campo opcional — debe mostrar guión o vacío estético, no 'null' (UX)",
+      "Generación masiva (1000 PDFs) — debe procesarse en background sin bloquear interfaz (performance)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en generación de PDFs en 19 años son: (1) encoding en PDFs especialmente con librerías que no soportan UTF-8 bien — todos los caracteres con tilde aparecen como ?? o cuadrados; (2) layouts que se rompen con texto largo porque no se diseñó pensando en valores reales del cliente; (3) firmas digitales que invalidan el PDF si se modifica cualquier byte después — orden de generación importa; (4) cambios en reglamentación DIAN para facturación electrónica que obligan a actualizar plantillas y validadores periódicamente; (5) generación masiva que bloquea el servidor si no se hace en colas asíncronas."
+  },
+  {
+    "id": "PTN-008",
+    "domain": "role_based_access",
+    "katary_context": "Control de acceso por rol con permisos granulares por módulo (compras, contable, tesorería, nómina) y por acción (ver, crear, modificar, aprobar, eliminar)",
+    "ac_pattern_typical": "El sistema valida los permisos del rol del usuario antes de mostrar funcionalidad o ejecutar acción y registra en log los accesos denegados",
+    "techniques_used": ["Decision Tables", "EP"],
+    "typical_scenarios": [
+      "Usuario admin accede a todas las funcionalidades (positive)",
+      "Usuario con rol limitado intenta ver módulo no permitido — denegar y registrar en log (negative — Decision Tables)",
+      "Usuario aprobador no puede aprobar sus propios documentos — segregación de funciones (security — CMMI)",
+      "Cambio de rol del usuario en sesión activa — debe reflejar nuevos permisos sin requerir re-login o forzar logout (edge case)",
+      "Permiso temporal/excepción con tiempo de vigencia — al expirar debe revertir automáticamente (boundary)",
+      "Usuario sin rol asignado — debe redirigir a pantalla informativa, no a error 500 (negative)",
+      "Combinación de múltiples roles del mismo usuario — unión de permisos vs intersección (Decision Tables)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en RBAC en 19 años son: (1) Decision Tables es indispensable aquí — combinaciones de roles, módulos y acciones generan matrices grandes que sin método se convierten en código spaghetti; (2) cambios de rol en sesión activa que requieren re-login y los usuarios pierden trabajo — siempre actualizar permisos en runtime; (3) segregación de funciones (no aprobar lo propio) es crítica para auditoría CMMI L3 — su ausencia es hallazgo grave; (4) permisos heredados vs explícitos generan confusión — documentar la regla con claridad; (5) accesos denegados sin log que dificultan auditoría posterior — siempre registrar quién intentó qué."
+  },
+  {
+    "id": "PTN-009",
+    "domain": "approval_workflow",
+    "katary_context": "Aprobaciones multi-nivel de solicitudes (compras, vacaciones, anticipos, contratos, viajes) que requieren validación según jerarquía o monto",
+    "ac_pattern_typical": "Las solicitudes siguen un flujo de aprobación según reglas de negocio (jefe directo, gerente, comité), con escalación, devoluciones y trazabilidad completa",
+    "techniques_used": ["Decision Tables", "EP"],
+    "typical_scenarios": [
+      "Aprobación lineal por jerarquía (jefe → gerente → director) — flujo exitoso (positive — Decision Tables)",
+      "Solicitud que supera monto requiere aprobación adicional de comité o junta — combinación monto + tipo (Decision Tables)",
+      "Aprobador inactivo (vacaciones, licencia) — escalación automática al backup definido (edge case)",
+      "Devolución para correcciones — el solicitante puede modificar y reenviar sin perder el historial (loop)",
+      "Cancelación en mitad del flujo — qué pasa con aprobaciones ya hechas y notificaciones (negative)",
+      "Múltiples aprobadores en paralelo — política definida: todos deben aprobar vs cualquiera basta (Decision Tables)",
+      "Solicitud que no obtiene aprobación en X días — debe escalar o cancelarse según política (boundary — tiempo)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en workflows de aprobación en 19 años son: (1) Decision Tables clarifica las reglas de aprobación que sin método se vuelven if-else inentendibles — la matriz de monto×tipo×rol siempre debe documentarse; (2) manejo de aprobadores ausentes es crítico para no bloquear el flujo — definir backup obligatorio; (3) histórico completo de cada acción (quién, cuándo, qué decidió, comentario) es indispensable para auditoría CMMI; (4) cancelaciones en mitad del flujo requieren reglas claras de qué hacer con notificaciones ya enviadas; (5) escalación por tiempo (SLA) que se olvida configurar y deja solicitudes 'colgadas' meses."
+  },
+  {
+    "id": "PTN-010",
+    "domain": "external_integrations",
+    "katary_context": "Integraciones con sistemas externos: DIAN (facturación electrónica), pasarelas de pago (PayU, Wompi, Mercado Pago), bancos (PSE, transferencias), correo (SMTP) y servicios de validación (Registraduría, RUES)",
+    "ac_pattern_typical": "El sistema invoca API externa, maneja respuestas exitosas y errores diferenciados, recupera de fallos transitorios y mantiene consistencia local",
+    "techniques_used": ["EP", "Decision Tables"],
+    "typical_scenarios": [
+      "Llamada exitosa con respuesta esperada del servicio externo (positive)",
+      "Timeout en respuesta — debe reintentar con backoff exponencial hasta N veces (negative — error handling)",
+      "Respuesta 4xx (datos del cliente mal formados) — NO reintentar, registrar error específico para corregir origen (Decision Tables)",
+      "Respuesta 5xx (servidor externo caído) — SÍ reintentar con backoff (Decision Tables)",
+      "Rate limit alcanzado (429) — esperar tiempo indicado en header y reintentar (edge case)",
+      "Operación duplicada accidentalmente — idempotency key debe devolver mismo resultado sin crear duplicado (security)",
+      "Respuesta con formato inesperado o campos faltantes — debe validar contra schema y rechazar con log (negative)",
+      "Servicio externo en mantenimiento sin aviso previo — circuit breaker debe activarse (resilience)"
+    ],
+    "lessons_learned_katary": "Los bugs más recurrentes en integraciones externas en 19 años son: (1) timeouts y reintentos son la mayor fuente de bugs — configurar siempre backoff exponencial y un límite máximo de reintentos; (2) la diferencia entre 4xx (no reintentar, problema en origen) y 5xx (sí reintentar, problema temporal) se confunde mucho — documentar la matriz de respuestas; (3) idempotencia es crítica para evitar pagos o registros duplicados — siempre usar idempotency keys; (4) logging detallado de cada intento (request, response, timing) es indispensable para debugging cuando el cliente reclama; (5) circuit breaker para servicios externos inestables previene cascada de fallos cuando un proveedor cae."
+  }
+]

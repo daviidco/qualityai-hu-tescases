@@ -1,0 +1,61 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QualityAI — Módulo 3  |  docker compose up --build
+#
+# Prerrequisito: modulo3_quality_pipeline/.env debe existir con las API keys.
+# Copiar desde modulo3_quality_pipeline/.env.example y completar los valores.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Backend: FastAPI + Módulo 3 pipeline ─────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: be-chatbot-ai/Dockerfile
+    container_name: qualityai_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      # El backend lee las API keys directamente del .env de modulo3
+      - ./modulo3_quality_pipeline/.env
+    volumes:
+      # ChromaDB: índices RAG persistentes entre reinicios
+      - chroma_data:/app/modulo3_quality_pipeline/chroma_db_m3
+      # Output: artefactos JSON + HTML generados por el pipeline
+      - pipeline_output:/app/modulo3_quality_pipeline/output
+      # Historial de proyectos (reportes finales persistidos)
+      - projects_data:/app/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # El pipeline tarda ~60-120 s en arrancar (ChromaDB + reranker)
+      start_period: 150s
+    restart: unless-stopped
+
+  # ── Frontend: Streamlit ───────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: fe-chatbot-ai/Dockerfile
+    container_name: qualityai_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000/api/v1
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+# ── Volúmenes nombrados ───────────────────────────────────────────────────────
+volumes:
+  chroma_data:
+    driver: local
+  pipeline_output:
+    driver: local
+  projects_data:
+    driver: local

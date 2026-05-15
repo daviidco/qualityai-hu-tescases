@@ -1,0 +1,65 @@
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Entornos virtuales ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Secrets y configuración local ─────────────────────────────────────────────
+.env
+# Conservar los ejemplos como referencia
+!.env.example
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+CLAUDE.md
+
+# ── Datos generados en runtime ────────────────────────────────────────────────
+# Reportes y contratos generados por el pipeline
+modulo3_quality_pipeline/output/
+
+# Vector store local (se regenera automáticamente al arrancar)
+modulo3_quality_pipeline/chroma_db*/
+chroma_db*/
+
+# Historial de proyectos del backend (datos de usuario, no código)
+be-chatbot-ai/storage/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── pytest / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

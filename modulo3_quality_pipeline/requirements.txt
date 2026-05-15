@@ -1,0 +1,32 @@
+# Módulo 3 — QualityAI Quality Orchestrator
+# Python 3.11+ requerido (PyTorch no soporta 3.13 aún)
+#
+# Activar el venv antes de instalar:
+#   python3.11 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+
+# LLM + Embeddings
+google-genai>=2.0.0
+groq>=0.9.0
+openai>=1.0.0
+cerebras-cloud-sdk>=1.0.0
+
+# RAG — recuperación híbrida
+rank-bm25>=0.2.2
+sentence-transformers>=3.0.0,<6.0.0
+transformers<5.0.0
+
+# Vector store
+chromadb>=1.0.0
+
+# Validación de datos
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Utilidades
+python-dotenv>=1.0.0
+rich>=13.0.0
+json-repair>=0.29.0
+
+# Nota: torch se instala automáticamente como dependencia de sentence-transformers
+# Si hay conflicto de NumPy: pip install "numpy<2" antes de sentence-transformers

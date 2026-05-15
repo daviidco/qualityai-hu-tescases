@@ -1,0 +1,7 @@
+.venv/
+chroma_db_m3/
+output/*.json
+output/*.html
+__pycache__/
+*.pyc
+.env
