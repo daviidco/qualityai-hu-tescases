@@ -150,28 +150,10 @@ def render_scrum_panel() -> None:
     });
   }
 
-  function wireClicks(){
-    D.querySelectorAll('[id^="pname_link_"]').forEach(function(el){
-      if(el._qaPnDone)return;
-      el._qaPnDone=true;
-      el.addEventListener('click',function(e){
-        e.preventDefault();
-        var rid=el.getAttribute('data-rid');
-        var auth=null;
-        try{auth=JSON.parse(localStorage.getItem('qa-auth')||'null');}catch(ex){}
-        var u=new URL(W.location.href);
-        u.searchParams.set('_sel_proj',rid);
-        if(auth&&auth.token)u.searchParams.set('_qt',auth.token);
-        W.location.replace(u.toString());
-      });
-    });
-    D.querySelectorAll('[id^="del_btn_"]').forEach(function(el){
+  setTimeout(function(){resize();D.querySelectorAll('[id^="del_btn_"]').forEach(function(el){
       var rid=el.id.replace('del_btn_','');
       wireHtmlBtn('del_btn_'+rid,'del_trig_'+rid,'_qaDelOk_'+rid);
-    });
-  }
-
-  setTimeout(function(){resize();wireClicks();},400);
+    });},400);
   W.addEventListener('resize',resize);
   D.querySelectorAll('[data-sel-proj]').forEach(function(el){el.remove();});
 })();
@@ -196,11 +178,9 @@ def render_scrum_panel() -> None:
 
 _LIST_CARD_CSS = (
     '<style>'
-    '#qa-pname-link:hover{color:#7dd3fc!important;}'
-    '#qa-del-btn:hover{background:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
-    '.qa-pname{color:#e2e8f0;font-weight:600;font-size:1.02rem;text-decoration:underline;'
-    'text-underline-offset:3px;text-decoration-color:#374151;cursor:pointer;display:inline-block;line-height:1.3;}'
-    '.qa-pname:hover{color:#7dd3fc!important;text-decoration-color:#7dd3fc;}'
+    'a.qa-pname{color:#e2e8f0;font-weight:600;font-size:1.02rem;text-decoration:underline;'
+    'text-underline-offset:3px;text-decoration-color:#334155;display:inline-block;line-height:1.3;}'
+    'a.qa-pname:hover{text-decoration-color:#60a5fa;}'
     '.qa-del-btn{cursor:pointer;display:flex;align-items:center;justify-content:center;width:100%;'
     'min-height:2rem;height:2rem;background:rgba(239,68,68,.08);border:1px solid #7f1d1d;border-radius:6px;'
     'transition:background .12s,border-color .12s;}'
@@ -487,7 +467,7 @@ def _project_card(p: dict, user_map: dict | None = None) -> None:
     col_info, col_analyze, col_del = st.columns([5, 1, 0.55])
     with col_info:
         st.markdown(
-            f'<span class="qa-pname" data-rid="{_rid}" id="pname_link_{_rid}">{pname}</span>',
+            f'<a class="qa-pname" href="?_sel_proj={_rid}" target="_self">{pname}</a>',
             unsafe_allow_html=True,
         )
         st.markdown(
