@@ -103,12 +103,11 @@ def render_scrum_panel() -> None:
         info = st.session_state.pop("_scrum_toast")
         _show_toast(info["msg"], info.get("kind", "success"))
 
-    # ── Stretch list + wire project-name clicks ───────────────────────────────
+    # ── Stretch list + wire project and delete clicks ────────────────────────
     components.html("""<script>
 (function(){
   var D=window.parent.document,W=window.parent;
 
-  // Stretch scrollable list container to fill viewport height.
   function resize(){
     var els=D.querySelectorAll(
       '[data-testid="stVerticalBlockBorderWrapper"] > div, [data-testid="stVerticalBlock"] > div'
@@ -123,10 +122,57 @@ def render_scrum_panel() -> None:
     }
   }
 
-  setTimeout(function(){resize();},350);
+  function childOfVB(el){
+    while(el&&el.parentElement){
+      if(el.parentElement.getAttribute('data-testid')==='stVerticalBlock') return el;
+      el=el.parentElement;
+    }
+    return null;
+  }
+
+  function wireHtmlBtn(htmlBtnId, anchId, flagProp){
+    var anch=D.getElementById(anchId);
+    if(anch){
+      var c=childOfVB(anch);
+      if(c&&c.nextElementSibling) c.nextElementSibling.style.display='none';
+    }
+    var btn=D.getElementById(htmlBtnId);
+    if(!btn||btn[flagProp])return;
+    btn[flagProp]=true;
+    btn.addEventListener('click',function(e){
+      e.preventDefault();e.stopPropagation();
+      var a=D.getElementById(anchId);
+      if(!a)return;
+      var cc=childOfVB(a);
+      if(!cc||!cc.nextElementSibling)return;
+      var sb=cc.nextElementSibling.querySelector('button');
+      if(sb)sb.click();
+    });
+  }
+
+  function wireClicks(){
+    D.querySelectorAll('[id^="pname_link_"]').forEach(function(el){
+      if(el._qaPnDone)return;
+      el._qaPnDone=true;
+      el.addEventListener('click',function(e){
+        e.preventDefault();
+        var rid=el.getAttribute('data-rid');
+        var auth=null;
+        try{auth=JSON.parse(localStorage.getItem('qa-auth')||'null');}catch(ex){}
+        var u=new URL(W.location.href);
+        u.searchParams.set('_sel_proj',rid);
+        if(auth&&auth.token)u.searchParams.set('_qt',auth.token);
+        W.location.replace(u.toString());
+      });
+    });
+    D.querySelectorAll('[id^="del_btn_"]').forEach(function(el){
+      var rid=el.id.replace('del_btn_','');
+      wireHtmlBtn('del_btn_'+rid,'del_trig_'+rid,'_qaDelOk_'+rid);
+    });
+  }
+
+  setTimeout(function(){resize();wireClicks();},400);
   W.addEventListener('resize',resize);
-  // Clean up legacy proxy elements injected by previous versions.
-  if(W._qaProjNameObs){W._qaProjNameObs.disconnect();delete W._qaProjNameObs;}
   D.querySelectorAll('[data-sel-proj]').forEach(function(el){el.remove();});
 })();
 </script>""", height=0, scrolling=False)
@@ -148,46 +194,22 @@ def render_scrum_panel() -> None:
 
 # ── Lista de proyectos ────────────────────────────────────────────────────────
 
-_TRASH_B64 = (
-    "PHN2ZyB3aWR0aD0iMTQiIGhlaWdodD0iMTQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2"
-    "tlPSIjZWY0NDQ0IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVq"
-    "b2luPSJyb3VuZCI+PHBvbHlsaW5lIHBvaW50cz0iMyA2IDUgNiAyMSA2Ii8+PHBhdGggZD0iTTE5IDZsLTEgMTRh"
-    "MiAyIDAgMCAxLTIgMkg4YTIgMiAwIDAgMS0yLTJMNSA2Ii8+PHBhdGggZD0iTTEwIDExdjYiLz48cGF0aCBkPSJN"
-    "MTQgMTF2NiIvPjxwYXRoIGQ9Ik05IDZWNGExIDEgMCAwIDEgMS0xaDRhMSAxIDAgMCAxIDEgMXYyIi8+PC9zdmc+"
-)
-
 _LIST_CARD_CSS = (
     '<style>'
-    # Project-name buttons: transparent link style, left-aligned
-    '[class*="st-key-pname_"] button{'
-    'background:transparent!important;border:none!important;box-shadow:none!important;'
-    'color:#e2e8f0!important;font-weight:600!important;font-size:1.02rem!important;'
-    'padding:.05rem 0!important;justify-content:flex-start!important;text-align:left!important;'
-    'text-decoration:underline!important;text-underline-offset:3px!important;'
-    'text-decoration-color:#374151!important;line-height:1.3!important;'
-    'min-height:0!important;height:auto!important;}'
-    '[class*="st-key-pname_"] button *{'
-    'text-align:left!important;}'
-    '[class*="st-key-pname_"] button:hover{'
-    'color:#7dd3fc!important;text-decoration-color:#7dd3fc!important;background:transparent!important;}'
-    '[class*="st-key-pname_"] button:focus:not(:active){box-shadow:none!important;}'
+    '#qa-pname-link:hover{color:#7dd3fc!important;}'
+    '#qa-del-btn:hover{background:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
+    '.qa-pname{color:#e2e8f0;font-weight:600;font-size:1.02rem;text-decoration:underline;'
+    'text-underline-offset:3px;text-decoration-color:#374151;cursor:pointer;display:inline-block;line-height:1.3;}'
+    '.qa-pname:hover{color:#7dd3fc!important;text-decoration-color:#7dd3fc;}'
+    '.qa-del-btn{cursor:pointer;display:flex;align-items:center;justify-content:center;width:100%;'
+    'min-height:2rem;height:2rem;background:rgba(239,68,68,.08);border:1px solid #7f1d1d;border-radius:6px;'
+    'transition:background .12s,border-color .12s;}'
+    '.qa-del-btn:hover{background:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
     # Analizar buttons: green when enabled
     '[class*="st-key-analyze_"] button:not([disabled]){'
     'background:#16a34a!important;border-color:#16a34a!important;color:#fff!important;}'
     '[class*="st-key-analyze_"] button:not([disabled]):hover{'
     'background:#15803d!important;border-color:#15803d!important;}'
-    # Delete buttons: SVG trash icon via ::before, text hidden
-    '[class*="st-key-del_list_"] button{'
-    'background-color:rgba(239,68,68,.08)!important;border:1px solid #7f1d1d!important;'
-    'border-radius:6px!important;color:transparent!important;font-size:0!important;'
-    'padding:0!important;min-height:2rem!important;height:2rem!important;'
-    'display:flex!important;align-items:center!important;justify-content:center!important;}'
-    '[class*="st-key-del_list_"] button p{display:none!important;}'
-    '[class*="st-key-del_list_"] button::before{'
-    'content:"";display:block;width:14px;height:14px;flex-shrink:0;'
-    f'background:url("data:image/svg+xml;base64,{_TRASH_B64}") no-repeat center/contain;}}'
-    '[class*="st-key-del_list_"] button:hover{'
-    'background-color:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
     # Delete confirm button: red primary
     '[class*="st-key-_del_confirm_btn"] button{'
     'background:#dc2626!important;border-color:#991b1b!important;}'
@@ -464,10 +486,10 @@ def _project_card(p: dict, user_map: dict | None = None) -> None:
     _has_analysis = bool((p.get("summary") or {}).get("total_stories"))
     col_info, col_analyze, col_del = st.columns([5, 1, 0.55])
     with col_info:
-        # Real Streamlit button — styled as link via CSS; no JS proxy needed.
-        if st.button(pname, key=f"pname_{_rid}", use_container_width=True):
-            st.session_state.scrum_selected_project = _rid
-            st.rerun()
+        st.markdown(
+            f'<span class="qa-pname" data-rid="{_rid}" id="pname_link_{_rid}">{pname}</span>',
+            unsafe_allow_html=True,
+        )
         st.markdown(
             f'<div style="display:flex;align-items:flex-start;gap:.5rem;margin-top:.15rem;">'
             f'{av}'
@@ -489,12 +511,13 @@ def _project_card(p: dict, user_map: dict | None = None) -> None:
         ):
             _analyze_modal(_rid)
     with col_del:
-        if st.button(
-            " ",
-            key=f"del_list_{_rid}",
-            use_container_width=True,
-            help="Eliminar proyecto",
-        ):
+        st.markdown(
+            f'<span class="qa-del-btn" id="del_btn_{_rid}">'
+            f'{icon("trash",14,"#ef4444")}</span>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(f'<div id="del_trig_{_rid}"></div>', unsafe_allow_html=True)
+        if st.button("​", key=f"del_hid_{_rid}"):
             _delete_project_dialog(_rid, p, _has_analysis)
     st.divider()
 
