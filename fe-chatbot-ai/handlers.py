@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import datetime
 
+import httpx
 import streamlit as st
 
 import api
@@ -62,14 +63,21 @@ def handle_generate_tests(resolutions: list[dict]) -> None:
         }
         _GEN_STORE[session_id] = store
 
+        # Capture auth token before spawning the thread (session_state is not
+        # safe to read from background threads in Streamlit).
+        _token = st.session_state.get("token")
+        _headers = {"Authorization": f"Bearer {_token}"} if _token else {}
+
         def _worker() -> None:
             try:
-                result = api.post(
+                r = httpx.post(
                     f"{BACKEND}/pipeline/generate-tests",
-                    {"session_id": session_id, "resolutions": resolutions},
+                    json={"session_id": session_id, "resolutions": resolutions},
+                    headers=_headers,
                     timeout=300,
                 )
-                store["result"] = result
+                r.raise_for_status()
+                store["result"] = r.json()
             except Exception as exc:  # noqa: BLE001
                 store["error"] = str(exc)
             finally:
@@ -81,11 +89,26 @@ def handle_generate_tests(resolutions: list[dict]) -> None:
     _gen_progress_dialog(session_id)
 
 
+_PROVIDER_LABELS: dict[str, str] = {
+    "gemini":   "Google Gemini",
+    "groq":     "Groq",
+    "cerebras": "Cerebras",
+    "deepseek": "DeepSeek",
+}
+_PROVIDER_COLORS: dict[str, str] = {
+    "gemini":   "#4285F4",
+    "groq":     "#F5A623",
+    "cerebras": "#9B59B6",
+    "deepseek": "#00bfa5",
+}
+
+
 @st.dialog("Generando análisis", width="small")
 def _gen_progress_dialog(key: str) -> None:
     """Cancellable progress dialog for the generate-tests background call."""
     store = _GEN_STORE.get(key)
     if store is None:
+        st.session_state.pop("_gen_key", None)
         st.rerun()
         return
 
@@ -93,6 +116,22 @@ def _gen_progress_dialog(key: str) -> None:
     mins, secs = divmod(elapsed, 60)
 
     if store.get("running"):
+        # ── Fetch current LLM state from backend ─────────────────────────────
+        status = api.get(f"{BACKEND}/pipeline/status") or {}
+        current_label: str = status.get("current_label", "—")
+        chain_meta: list[dict] = status.get("chain_meta", [])
+        skip_count: int = status.get("skip_count", 0)
+
+        # Derive provider name + model from chain_meta
+        current_meta = next(
+            (m for m in chain_meta if m.get("label") == current_label), {}
+        )
+        pname = current_meta.get("provider", current_label.split("[")[0] if "[" in current_label else current_label)
+        model = current_meta.get("model", "")
+        display_name = _PROVIDER_LABELS.get(pname, pname.capitalize())
+        dot_color = _PROVIDER_COLORS.get(pname, "#8b949e")
+
+        # ── Spinner + title ───────────────────────────────────────────────────
         st.markdown(
             '<style>@keyframes qa-spin{to{transform:rotate(360deg);}}'
             '#qa-gen-ring{width:40px;height:40px;border:3px solid #21262d;'
@@ -102,21 +141,83 @@ def _gen_progress_dialog(key: str) -> None:
             '<div style="text-align:center;">'
             '<div style="font-weight:700;color:#e2e8f0;font-size:.97rem;margin-bottom:.35rem;">'
             'Generando Historias de Usuario y Test Cases</div>'
-            '<div style="color:#6b7280;font-size:.83rem;margin-bottom:.6rem;">'
+            '<div style="color:#6b7280;font-size:.83rem;margin-bottom:.7rem;">'
             'El pipeline de IA está procesando el requerimiento.<br>'
             'Este proceso puede tardar entre 1 y 3 minutos.</div>'
-            f'<div style="color:#00bcd4;font-size:.88rem;font-weight:600;margin-bottom:1rem;">'
-            f'⏱ {mins:02d}:{secs:02d} transcurridos</div>'
             '</div>',
             unsafe_allow_html=True,
         )
-        if st.button("⏹ Detener proceso", use_container_width=True, key="gen_stop_btn"):
-            store["cancelled"] = True
-            store["running"] = False
-            _GEN_STORE.pop(key, None)
-            st.session_state.pop("_gen_key", None)
-            st.session_state.is_running = False
-            st.rerun()
+
+        # ── Active provider badge ─────────────────────────────────────────────
+        model_str = f' · <span style="color:#9ca3af;">{model}</span>' if model else ""
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:.5rem;'
+            f'background:#0d1117;border:1px solid #21262d;border-radius:8px;'
+            f'padding:.45rem .75rem;margin-bottom:.5rem;">'
+            f'<span style="width:8px;height:8px;border-radius:50%;'
+            f'background:{dot_color};flex-shrink:0;"></span>'
+            f'<span style="color:#e2e8f0;font-size:.85rem;font-weight:600;flex:1;">'
+            f'{display_name}{model_str}</span>'
+            f'<span style="font-size:.68rem;color:#4b5563;">{current_label}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Chain visualization (if multiple providers) ───────────────────────
+        if len(chain_meta) > 1:
+            chips = []
+            for i, meta in enumerate(chain_meta):
+                is_active = meta.get("label") == current_label
+                bg = "#0e3a4a" if is_active else "#0d1117"
+                border = "#0891b2" if is_active else "#21262d"
+                txt_color = "#00bcd4" if is_active else "#4b5563"
+                p = meta.get("provider", "?")
+                dot = _PROVIDER_COLORS.get(p, "#555")
+                chips.append(
+                    f'<span style="display:inline-flex;align-items:center;gap:.3rem;'
+                    f'background:{bg};border:1px solid {border};border-radius:6px;'
+                    f'padding:.18rem .45rem;font-size:.72rem;color:{txt_color};">'
+                    f'<span style="width:6px;height:6px;border-radius:50%;background:{dot};"></span>'
+                    f'{_PROVIDER_LABELS.get(p, p.capitalize())}'
+                    f'</span>'
+                )
+            arrow = '<span style="color:#374151;font-size:.7rem;"> → </span>'
+            st.markdown(
+                f'<div style="text-align:center;margin-bottom:.55rem;">'
+                + arrow.join(chips)
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Timer ─────────────────────────────────────────────────────────────
+        st.markdown(
+            f'<div style="text-align:center;color:#00bcd4;font-size:.88rem;'
+            f'font-weight:600;margin-bottom:.9rem;">⏱ {mins:02d}:{secs:02d} transcurridos</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Action buttons ────────────────────────────────────────────────────
+        can_skip = len(chain_meta) > 1 and skip_count < len(chain_meta) - 1
+        col_skip, col_stop = st.columns([1, 1])
+        with col_skip:
+            if st.button(
+                "▶ Siguiente proveedor",
+                use_container_width=True,
+                disabled=not can_skip,
+                key="gen_skip_btn",
+                help="Saltar al siguiente proveedor/key en la cadena",
+            ):
+                api.post(f"{BACKEND}/pipeline/skip-provider", {})
+                st.rerun()
+        with col_stop:
+            if st.button("⏹ Detener", use_container_width=True, key="gen_stop_btn"):
+                store["cancelled"] = True
+                store["running"] = False
+                _GEN_STORE.pop(key, None)
+                st.session_state.pop("_gen_key", None)
+                st.session_state.is_running = False
+                st.rerun()
+
         # Poll every 2 seconds
         time.sleep(2)
         st.rerun()
@@ -141,7 +242,10 @@ def _gen_progress_dialog(key: str) -> None:
 
     if result is None:
         st.session_state.is_running = False
-        st.rerun()
+        st.error(
+            "No se recibió respuesta del backend. "
+            "Verifica que el servidor esté activo y vuelve a intentarlo."
+        )
         return
 
     st.session_state.hitl_features = result["features"]

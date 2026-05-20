@@ -30,6 +30,46 @@ def _raise_http(exc: Exception) -> None:
     raise HTTPException(status_code=500, detail=detail)
 
 
+def _get_llm(request: Request):
+    """Obtiene el FallbackLLMProvider del pipeline (o None si no está disponible)."""
+    pipeline = getattr(request.app.state, "pipeline", None)
+    req_agent = getattr(pipeline, "_req_agent", None)
+    return getattr(req_agent, "_llm", None)
+
+
+# ── Estado del LLM en tiempo real ────────────────────────────────────────────
+
+@router.get("/pipeline/status")
+async def pipeline_status(
+    request: Request,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Devuelve el proveedor LLM activo y la cadena completa para el frontend."""
+    llm = _get_llm(request)
+    return {
+        "current_label": getattr(llm, "current_label", "—"),
+        "chain_meta": getattr(llm, "chain_meta", []),
+        "skip_count": getattr(llm, "_skip_count", 0),
+    }
+
+
+@router.post("/pipeline/skip-provider")
+async def skip_provider(
+    request: Request,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Avanza el puntero de la cadena al siguiente proveedor/key."""
+    llm = _get_llm(request)
+    if llm is None or not hasattr(llm, "skip_current"):
+        return {"ok": False, "reason": "FallbackLLMProvider no disponible"}
+    llm.skip_current()
+    return {
+        "ok": True,
+        "skip_count": getattr(llm, "_skip_count", 0),
+        "current_label": getattr(llm, "current_label", "—"),
+    }
+
+
 # ── Fase 1-a: Detectar ambigüedades ──────────────────────────────────────────
 
 @router.post("/pipeline/analyze", response_model=AnalyzeResponse)

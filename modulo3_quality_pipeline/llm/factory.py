@@ -61,6 +61,7 @@ def create_provider_chain(doc: dict) -> "FallbackLLMProvider":
     gemini_key_for_embed = gemini_keys[0] if gemini_keys else ""
 
     chain: list[tuple[str, ILLMProvider]] = []
+    chain_meta: list[dict] = []
 
     for pname in order:
         pdata = providers_data.get(pname, {})
@@ -73,6 +74,7 @@ def create_provider_chain(doc: dict) -> "FallbackLLMProvider":
                 settings = _settings_for(pname, key, model, gemini_key_for_embed)
                 provider = create_llm(settings)
                 chain.append((label, provider))
+                chain_meta.append({"label": label, "provider": pname, "model": model})
                 print(f"  ✅ Proveedor en cadena: {label} — modelo={model}")
             except Exception as exc:  # noqa: BLE001
                 print(f"  ⚠️  No se pudo inicializar {label}: {exc}")
@@ -83,7 +85,7 @@ def create_provider_chain(doc: dict) -> "FallbackLLMProvider":
             "Configura al menos una API key en la pantalla de Configuración de Modelos LLM."
         )
 
-    return FallbackLLMProvider(chain)
+    return FallbackLLMProvider(chain, chain_meta=chain_meta)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

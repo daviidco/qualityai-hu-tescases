@@ -164,6 +164,10 @@ class RequirementsAgent(AbstractBaseAgent):
 
         analyst_resolutions: list de dicts {word, category, analyst_resolution, status}
         """
+        # Reset provider chain so each web request starts from the highest-priority provider.
+        if hasattr(self._llm, "reset_skip"):
+            self._llm.reset_skip()
+
         run_id = self._generate_run_id("m3-req")
         ambiguities = self._ambiguity_detector.analyze(requirement)
 
@@ -272,6 +276,11 @@ class RequirementsAgent(AbstractBaseAgent):
             except (ValidationError, ValueError, KeyError) as e:
                 last_error = str(e)
                 print(f"  ⚠️  Intento {attempt}/{self._settings.max_retries} fallido: {last_error[:100]}")
+                # Advance to the next provider in the chain so the next retry uses a
+                # different LLM — the current one returned structurally valid but
+                # semantically incomplete JSON (e.g. acceptance_criteria: []).
+                if hasattr(self._llm, "skip_current"):
+                    self._llm.skip_current()
 
         raise RuntimeError(
             f"No se pudo generar Contract A válido tras {self._settings.max_retries} intentos. "
@@ -317,6 +326,12 @@ class RequirementsAgent(AbstractBaseAgent):
                         ))
                     except Exception:
                         continue  # criterio malformado — omitir
+
+                # Skip stories whose criteria were all filtered out — creating
+                # UserStory with acceptance_criteria=[] would fail Pydantic validation.
+                if not criteria:
+                    print(f"  ⚠️  Historia {us_id} omitida: sin criterios de aceptación válidos")
+                    continue
 
                 resolutions = []
                 for r_data in us_data.get("ambiguities_resolved", []):

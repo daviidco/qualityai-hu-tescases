@@ -250,16 +250,6 @@ def main() -> None:
         st.rerun()
         return
 
-    # ── LLM provider drag-and-drop order (JS sets _llm_order param) ─────────
-    _llm_order = st.query_params.get("_llm_order", "")
-    if _llm_order:
-        st.query_params.pop("_llm_order")
-        new_order = [p.strip() for p in _llm_order.split(",") if p.strip()]
-        if new_order:
-            st.session_state["llm_order"] = new_order
-        st.rerun()
-        return
-
     # ── Project name click → detail view (JS sets _sel_proj param) ───────────
     _sel_proj = st.query_params.get("_sel_proj", "")
     if _sel_proj:
@@ -270,6 +260,14 @@ def main() -> None:
         return
 
     view = st.session_state.get("view", "")
+
+    # ── Diálogo de generación persistente ─────────────────────────────────────
+    # Re-abre el diálogo en cada rerun mientras haya una generación activa,
+    # sin importar qué vista esté activa.
+    _gen_key = st.session_state.get("_gen_key")
+    if _gen_key:
+        from handlers import _gen_progress_dialog
+        _gen_progress_dialog(_gen_key)
 
     # ── Vistas autenticadas ───────────────────────────────────────────────────
     render_sidebar()

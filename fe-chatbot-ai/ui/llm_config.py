@@ -1,10 +1,7 @@
-"""Configuración de proveedores LLM — panel izquierdo (keys/modelo) + panel derecho (orden drag-and-drop)."""
+"""Configuración de proveedores LLM — panel izquierdo (keys/modelo) + panel derecho (orden de prioridad)."""
 from __future__ import annotations
 
-import json
-
 import streamlit as st
-import streamlit.components.v1 as components
 
 import api
 from config import BACKEND
@@ -61,14 +58,14 @@ def render_llm_config() -> None:
         for p in _ALL:
             _render_provider_card(p, providers_data, models_map)
 
-    # ── Right: drag-and-drop priority list ───────────────────────────────────
+    # ── Right: priority order controls ───────────────────────────────────────
     with col_right:
         st.markdown(
             '<div style="font-size:.75rem;color:#8b949e;letter-spacing:.07em;'
             'margin-bottom:.6rem;">ORDEN DE PRIORIDAD</div>',
             unsafe_allow_html=True,
         )
-        _render_drag_order(order, providers_data)
+        _render_order_controls(order, providers_data)
 
     # ── Save ─────────────────────────────────────────────────────────────────
     st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
@@ -194,134 +191,80 @@ def _render_provider_card(p: str, providers_data: dict, models_map: dict) -> Non
     )
 
 
-# ── Right panel: drag-and-drop order ─────────────────────────────────────────
+# ── Right panel: native priority order controls ───────────────────────────────
 
-def _render_drag_order(order: list[str], providers_data: dict) -> None:
-    """Render an HTML5 drag-and-drop priority list inside a components.html iframe.
-    On drop, JS sends new order via ?_llm_order= query param → app.py stores in session_state."""
+def _render_order_controls(order: list[str], providers_data: dict) -> None:
+    """Botones ↑/↓ nativos de Streamlit para reordenar proveedores.
 
-    items_js = json.dumps([
-        {
-            "id": p,
-            "label": _PROVIDERS.get(p, {}).get("label", p),
-            "color": _PROVIDERS.get(p, {}).get("color", "#888"),
-            "keys": len(providers_data.get(p, {}).get("keys", [])),
-        }
-        for p in order
-    ])
+    El orden vive exclusivamente en st.session_state["llm_order"]; no hay
+    comunicación JS→Python, por lo que el estado persiste correctamente en
+    todos los reruns y recargas.
+    """
+    _ROW_CSS = (
+        "<style>"
+        "[class*='st-key-llm_up_'],[class*='st-key-llm_dn_']{"
+        "  button{padding:0!important;min-height:1.6rem!important;"
+        "  font-size:.85rem!important;background:transparent!important;"
+        "  border:1px solid #30363d!important;color:#8b949e!important;}"
+        "  button:hover{border-color:#58a6ff!important;color:#58a6ff!important;}"
+        "}"
+        "</style>"
+    )
+    st.markdown(_ROW_CSS, unsafe_allow_html=True)
 
-    html = f"""
-<style>
-  body{{margin:0;padding:0;background:transparent;font-family:sans-serif;}}
-  #drag-list{{list-style:none;margin:0;padding:0;}}
-  .drag-item{{
-    display:flex;align-items:center;gap:.6rem;
-    background:#0d1117;border:1px solid #21262d;border-radius:8px;
-    padding:.55rem .75rem;margin-bottom:.4rem;cursor:grab;
-    transition:background .15s,border-color .15s,transform .1s;
-    user-select:none;
-  }}
-  .drag-item:active{{cursor:grabbing;}}
-  .drag-item.drag-over{{
-    border-color:#0891b2;background:#0e2a38;transform:scale(1.01);
-  }}
-  .drag-item.dragging{{opacity:.4;}}
-  .handle{{color:#4b5563;font-size:1rem;flex-shrink:0;line-height:1;}}
-  .rank{{
-    width:1.5rem;height:1.5rem;border-radius:50%;
-    background:#1a1f2e;color:#8b949e;font-size:.78rem;font-weight:700;
-    display:flex;align-items:center;justify-content:center;flex-shrink:0;
-  }}
-  .dot{{width:9px;height:9px;border-radius:50%;flex-shrink:0;}}
-  .label{{color:#e2e8f0;font-size:.88rem;font-weight:600;flex:1;}}
-  .badge{{
-    font-size:.65rem;padding:.1rem .38rem;border-radius:5px;flex-shrink:0;
-  }}
-  .badge-keys{{background:#052e16;color:#4ade80;}}
-  .badge-nokeys{{background:#450a0a;color:#fca5a5;}}
-  .badge-primary{{background:#0e3a4a;color:#00bcd4;}}
-  .hint{{color:#4b5563;font-size:.75rem;margin-top:.5rem;text-align:center;}}
-</style>
+    for i, p in enumerate(order):
+        meta = _PROVIDERS.get(p, {})
+        key_count = len(providers_data.get(p, {}).get("keys", []))
 
-<ul id="drag-list"></ul>
-<div class="hint">⠿ Arrastra para cambiar el orden</div>
+        is_primary = i == 0
+        border_color = "#0891b2" if is_primary else "#21262d"
+        bg_color = "#061a22" if is_primary else "#0d1117"
 
-<script>
-(function(){{
-  var W = window.parent;
-  var items = {items_js};
-  var list  = document.getElementById('drag-list');
-  var dragged = null;
+        key_badge = (
+            f'<span style="background:#052e16;color:#4ade80;font-size:.65rem;'
+            f'padding:.1rem .38rem;border-radius:5px;">'
+            f'{key_count} key{"s" if key_count != 1 else ""}</span>'
+            if key_count else
+            '<span style="background:#450a0a;color:#fca5a5;font-size:.65rem;'
+            'padding:.1rem .38rem;border-radius:5px;">sin keys</span>'
+        )
+        primary_badge = (
+            '<span style="background:#0e3a4a;color:#00bcd4;font-size:.65rem;'
+            'padding:.1rem .38rem;border-radius:5px;margin-left:.3rem;">primario</span>'
+            if is_primary else ""
+        )
 
-  function renderList() {{
-    list.innerHTML = '';
-    items.forEach(function(it, i) {{
-      var li = document.createElement('li');
-      li.className = 'drag-item';
-      li.setAttribute('draggable','true');
-      li.dataset.id = it.id;
+        row_html = (
+            f'<div style="display:flex;align-items:center;gap:.5rem;'
+            f'background:{bg_color};border:1px solid {border_color};'
+            f'border-radius:8px;padding:.45rem .7rem;margin-bottom:.35rem;">'
+            f'<span style="width:1.4rem;height:1.4rem;border-radius:50%;'
+            f'background:#1a1f2e;color:#8b949e;font-size:.75rem;font-weight:700;'
+            f'display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+            f'{i + 1}</span>'
+            f'<span style="width:9px;height:9px;border-radius:50%;'
+            f'background:{meta.get("color","#888")};flex-shrink:0;"></span>'
+            f'<span style="color:#e2e8f0;font-size:.88rem;font-weight:600;flex:1;">'
+            f'{meta.get("label", p)}</span>'
+            f'{key_badge}{primary_badge}'
+            f'</div>'
+        )
 
-      var keysHtml = it.keys > 0
-        ? '<span class="badge badge-keys">' + it.keys + ' key' + (it.keys===1?'':'s') + '</span>'
-        : '<span class="badge badge-nokeys">sin keys</span>';
-      var primaryHtml = i === 0
-        ? '<span class="badge badge-primary">primario</span>' : '';
-
-      li.innerHTML =
-        '<span class="handle">⠿</span>' +
-        '<span class="rank">' + (i+1) + '</span>' +
-        '<span class="dot" style="background:' + it.color + '"></span>' +
-        '<span class="label">' + it.label + '</span>' +
-        keysHtml + primaryHtml;
-
-      li.addEventListener('dragstart', function(e) {{
-        dragged = li;
-        setTimeout(function(){{ li.classList.add('dragging'); }}, 0);
-        e.dataTransfer.effectAllowed = 'move';
-      }});
-      li.addEventListener('dragend', function() {{
-        li.classList.remove('dragging');
-        list.querySelectorAll('.drag-item').forEach(function(el){{
-          el.classList.remove('drag-over');
-        }});
-        // Read new order from DOM and send to Python via query param
-        var newOrder = Array.from(list.querySelectorAll('.drag-item'))
-          .map(function(el){{ return el.dataset.id; }});
-        var u = new URL(W.location.href);
-        u.searchParams.set('_llm_order', newOrder.join(','));
-        W.location.replace(u.toString());
-      }});
-      li.addEventListener('dragover', function(e) {{
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        if(dragged && dragged !== li) {{
-          list.querySelectorAll('.drag-item').forEach(function(el){{
-            el.classList.remove('drag-over');
-          }});
-          li.classList.add('drag-over');
-        }}
-      }});
-      li.addEventListener('drop', function(e) {{
-        e.preventDefault();
-        if(!dragged || dragged === li) return;
-        var allItems = Array.from(list.querySelectorAll('.drag-item'));
-        var fromIdx = allItems.indexOf(dragged);
-        var toIdx   = allItems.indexOf(li);
-        // Reorder items array
-        var moved = items.splice(fromIdx, 1)[0];
-        items.splice(toIdx, 0, moved);
-        renderList();
-      }});
-
-      list.appendChild(li);
-    }});
-  }}
-
-  renderList();
-}})();
-</script>
-"""
-    components.html(html, height=len(order) * 58 + 40, scrolling=False)
+        col_row, col_up, col_dn = st.columns([6, 0.55, 0.55])
+        with col_row:
+            st.markdown(row_html, unsafe_allow_html=True)
+        with col_up:
+            disabled_up = i == 0
+            if st.button("↑", key=f"llm_up_{p}", disabled=disabled_up, use_container_width=True):
+                order[i - 1], order[i] = order[i], order[i - 1]
+                st.session_state["llm_order"] = order[:]
+                st.rerun()
+        with col_dn:
+            disabled_dn = i == len(order) - 1
+            if st.button("↓", key=f"llm_dn_{p}", disabled=disabled_dn, use_container_width=True):
+                order[i], order[i + 1] = order[i + 1], order[i]
+                st.session_state["llm_order"] = order[:]
+                st.rerun()
 
 
 # ── Save ─────────────────────────────────────────────────────────────────────

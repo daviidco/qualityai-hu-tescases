@@ -148,16 +148,26 @@ def render_scrum_panel() -> None:
 
 # ── Lista de proyectos ────────────────────────────────────────────────────────
 
+_TRASH_B64 = (
+    "PHN2ZyB3aWR0aD0iMTQiIGhlaWdodD0iMTQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2"
+    "tlPSIjZWY0NDQ0IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVq"
+    "b2luPSJyb3VuZCI+PHBvbHlsaW5lIHBvaW50cz0iMyA2IDUgNiAyMSA2Ii8+PHBhdGggZD0iTTE5IDZsLTEgMTRh"
+    "MiAyIDAgMCAxLTIgMkg4YTIgMiAwIDAgMS0yLTJMNSA2Ii8+PHBhdGggZD0iTTEwIDExdjYiLz48cGF0aCBkPSJN"
+    "MTQgMTF2NiIvPjxwYXRoIGQ9Ik05IDZWNGExIDEgMCAwIDEgMS0xaDRhMSAxIDAgMCAxIDEgMXYyIi8+PC9zdmc+"
+)
+
 _LIST_CARD_CSS = (
     '<style>'
-    # Project-name buttons: transparent link style
+    # Project-name buttons: transparent link style, left-aligned
     '[class*="st-key-pname_"] button{'
     'background:transparent!important;border:none!important;box-shadow:none!important;'
     'color:#e2e8f0!important;font-weight:600!important;font-size:1.02rem!important;'
-    'padding:.05rem 0!important;justify-content:flex-start!important;'
+    'padding:.05rem 0!important;justify-content:flex-start!important;text-align:left!important;'
     'text-decoration:underline!important;text-underline-offset:3px!important;'
     'text-decoration-color:#374151!important;line-height:1.3!important;'
     'min-height:0!important;height:auto!important;}'
+    '[class*="st-key-pname_"] button *{'
+    'text-align:left!important;}'
     '[class*="st-key-pname_"] button:hover{'
     'color:#7dd3fc!important;text-decoration-color:#7dd3fc!important;background:transparent!important;}'
     '[class*="st-key-pname_"] button:focus:not(:active){box-shadow:none!important;}'
@@ -166,13 +176,18 @@ _LIST_CARD_CSS = (
     'background:#16a34a!important;border-color:#16a34a!important;color:#fff!important;}'
     '[class*="st-key-analyze_"] button:not([disabled]):hover{'
     'background:#15803d!important;border-color:#15803d!important;}'
-    # Delete buttons: red
+    # Delete buttons: SVG trash icon via ::before, text hidden
     '[class*="st-key-del_list_"] button{'
-    'background:rgba(239,68,68,.08)!important;border:1px solid #7f1d1d!important;'
-    'border-radius:6px!important;color:#ef4444!important;'
-    'padding:0!important;min-height:2rem!important;height:2rem!important;}'
+    'background-color:rgba(239,68,68,.08)!important;border:1px solid #7f1d1d!important;'
+    'border-radius:6px!important;color:transparent!important;font-size:0!important;'
+    'padding:0!important;min-height:2rem!important;height:2rem!important;'
+    'display:flex!important;align-items:center!important;justify-content:center!important;}'
+    '[class*="st-key-del_list_"] button p{display:none!important;}'
+    '[class*="st-key-del_list_"] button::before{'
+    'content:"";display:block;width:14px;height:14px;flex-shrink:0;'
+    f'background:url("data:image/svg+xml;base64,{_TRASH_B64}") no-repeat center/contain;}}'
     '[class*="st-key-del_list_"] button:hover{'
-    'background:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
+    'background-color:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
     # Delete confirm button: red primary
     '[class*="st-key-_del_confirm_btn"] button{'
     'background:#dc2626!important;border-color:#991b1b!important;}'
@@ -474,9 +489,8 @@ def _project_card(p: dict, user_map: dict | None = None) -> None:
         ):
             _analyze_modal(_rid)
     with col_del:
-        # Real Streamlit button — styled as red trash icon via CSS.
         if st.button(
-            "✕",
+            " ",
             key=f"del_list_{_rid}",
             use_container_width=True,
             help="Eliminar proyecto",
