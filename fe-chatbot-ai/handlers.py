@@ -24,6 +24,9 @@ def handle_analyze(requirement: str) -> None:
     st.session_state.is_running = True
     _record_history(requirement)
 
+    if "_prev_view" not in st.session_state:
+        st.session_state["_prev_view"] = st.session_state.get("view", "chat")
+
     with st.spinner("Analizando ambigüedades en el requerimiento…"):
         data = api.post(f"{BACKEND}/pipeline/analyze", {"requirement": requirement}, timeout=60)
 
@@ -216,6 +219,7 @@ def _gen_progress_dialog(key: str) -> None:
                 _GEN_STORE.pop(key, None)
                 st.session_state.pop("_gen_key", None)
                 st.session_state.is_running = False
+                st.session_state.view = st.session_state.pop("_prev_view", "chat")
                 st.rerun()
 
         # Poll every 2 seconds
@@ -232,6 +236,7 @@ def _gen_progress_dialog(key: str) -> None:
 
     if cancelled:
         st.session_state.is_running = False
+        st.session_state.view = st.session_state.pop("_prev_view", "chat")
         st.rerun()
         return
 

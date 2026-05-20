@@ -1000,6 +1000,7 @@ def _analyze_modal(run_id: str) -> None:
     with col_a:
         if st.button("Analizar →", type="primary", use_container_width=True):
             if selected_req:
+                st.session_state["_prev_view"]           = st.session_state.get("view", "scrum_projects")
                 st.session_state["_auto_analyze"]      = selected_req.get("content", "")
                 st.session_state["_auto_analyze_proj"]  = run_id
                 st.session_state["_auto_analyze_req"]   = selected_id

@@ -36,7 +36,6 @@ _GROQ_MODELS = [
     "llama3-70b-8192",
 ]
 _CEREBRAS_MODELS = [
-    "llama-3.3-70b",
     "llama3.1-70b",
     "llama3.1-8b",
 ]
