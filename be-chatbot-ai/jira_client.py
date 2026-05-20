@@ -45,7 +45,7 @@ def _resolve_account_id(jira: JIRA, email: str) -> str | None:
         users = jira.search_users(query=email, maxResults=1)
         if users and hasattr(users[0], 'accountId') and users[0].accountId:
             return users[0].accountId
-    except JIRAError:
+    except Exception:  # noqa: BLE001
         pass
     return None
 
@@ -85,13 +85,23 @@ def create_jira_project(
             f"{base_url}/rest/api/2/project",
             json=payload,
         )
-        response.raise_for_status()
+        if not response.ok:
+            try:
+                err = response.json()
+                msgs = err.get("errorMessages") or []
+                errs = err.get("errors") or {}
+                body = "; ".join(msgs) + (" — " + str(errs) if errs else "") if msgs or errs else response.text
+            except Exception:
+                body = response.text
+            raise RuntimeError(f"Error creando proyecto Jira '{project_key}' ({response.status_code}): {body}")
         data = response.json()
         return {
             "key": data["key"],
             "name": project_name,
             "url": f"{base_url}/browse/{data['key']}",
         }
+    except RuntimeError:
+        raise
     except JIRAError as exc:
         raise RuntimeError(f"Error creando proyecto Jira '{project_key}': {exc.text}") from exc
     except Exception as exc:
@@ -104,13 +114,13 @@ def _resolve_reporter(jira: JIRA, email: str) -> dict[str, Any]:
     (el usuario autenticado / service account)."""
     try:
         users = jira.search_users(query=email, maxResults=1)
-    except JIRAError:
+        if not users:
+            return {}
+        if hasattr(users[0], 'accountId') and users[0].accountId:
+            return {"reporter": {"id": users[0].accountId}}
+        return {"reporter": {"name": email}}
+    except Exception:  # noqa: BLE001
         return {}
-    if not users:
-        return {}
-    if hasattr(users[0], 'accountId') and users[0].accountId:
-        return {"reporter": {"id": users[0].accountId}}
-    return {"reporter": {"name": email}}
 
 
 def create_tickets(
@@ -134,7 +144,7 @@ def create_tickets(
     project = project_key
     reporter = _resolve_reporter(jira, reporter_email)
 
-    requirement = report_data.get("original_requirement", "")[:100] or f"Pipeline {run_id[:8]}"
+    requirement = " ".join(report_data.get("original_requirement", "").split())[:100] or f"Pipeline {run_id[:8]}"
     user_stories = report_data.get("user_stories", [])
 
     epic_type = _issue_type("JIRA_EPIC_TYPE", "Epic")
@@ -158,7 +168,9 @@ def create_tickets(
     try:
         epic = jira.create_issue(fields=epic_fields)
     except JIRAError as exc:
-        raise RuntimeError(f"Error creando Epic en Jira: {exc.text}") from exc
+        raise RuntimeError(f"Error creando Epic en Jira: {exc.text or exc}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Error creando Epic en Jira: {exc}") from exc
 
     base_url = os.environ["JIRA_URL"].rstrip("/")
     result["epic"] = {"key": epic.key, "url": f"{base_url}/browse/{epic.key}"}

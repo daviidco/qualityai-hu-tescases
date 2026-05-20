@@ -200,20 +200,7 @@ def _gen_progress_dialog(key: str) -> None:
         )
 
         # ── Action buttons ────────────────────────────────────────────────────
-        can_skip = len(chain_meta) > 1 and skip_count < len(chain_meta) - 1
-        col_skip, col_stop = st.columns([1, 1])
-        with col_skip:
-            if st.button(
-                "▶ Siguiente proveedor",
-                use_container_width=True,
-                disabled=not can_skip,
-                key="gen_skip_btn",
-                help="Saltar al siguiente proveedor/key en la cadena",
-            ):
-                api.post(f"{BACKEND}/pipeline/skip-provider", {})
-                st.rerun()
-        with col_stop:
-            if st.button("⏹ Detener", use_container_width=True, key="gen_stop_btn"):
+        if st.button("⏹ Detener", use_container_width=True, key="gen_stop_btn"):
                 store["cancelled"] = True
                 store["running"] = False
                 _GEN_STORE.pop(key, None)

@@ -259,8 +259,12 @@ class TestArchitectAgent(AbstractBaseAgent):
         """Convierte el JSON del LLM en objetos GherkinScenario validados."""
         scenarios = []
         for s_data in raw_json.get("scenarios", []):
+            if not isinstance(s_data, dict):
+                continue
             steps = []
             for step_data in s_data.get("steps", []):
+                if not isinstance(step_data, dict):
+                    continue
                 keyword = step_data.get("keyword", "Given")
                 if keyword not in {"Given", "When", "Then", "And", "But"}:
                     keyword = "And"

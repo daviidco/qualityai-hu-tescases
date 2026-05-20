@@ -19,6 +19,18 @@ from ui.icons import icon
 # Key: store_key.  Value: dict with running/result/error/cancelled/start_time.
 _CODE_GEN_STORE: dict[str, dict] = {}
 
+# Module-level store for background Jira export threads.
+_JIRA_STORE: dict[str, dict] = {}
+
+_JIRA_STEPS = [
+    "🔌 Conectando con Jira…",
+    "📁 Creando proyecto…",
+    "📋 Creando Epic…",
+    "📝 Creando historias…",
+    "🏷 Creando sub-tareas…",
+    "✅ Finalizando…",
+]
+
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 _B = 'padding:.15rem .6rem;border-radius:10px;font-size:.82rem;'
@@ -982,11 +994,37 @@ def _inject_create_form_js() -> None:
 
 # ── Gen Code helpers ─────────────────────────────────────────────────────────
 
-def _cg_spinner_html(store_key: str) -> None:
-    """Renders the progress UI for a running code-gen thread (inline, no dialog)."""
+_PROVIDER_LABELS: dict[str, str] = {
+    "gemini":   "Google Gemini",
+    "groq":     "Groq",
+    "cerebras": "Cerebras",
+    "deepseek": "DeepSeek",
+}
+_PROVIDER_COLORS: dict[str, str] = {
+    "gemini":   "#4285F4",
+    "groq":     "#F5A623",
+    "cerebras": "#9B59B6",
+    "deepseek": "#00bfa5",
+}
+
+
+def _cg_progress_ui(store_key: str, status: dict) -> None:
+    """Renders code-gen progress: spinner, active provider badge, chain chips, timer."""
     store = _CODE_GEN_STORE.get(store_key, {})
     elapsed = int(time.time() - store.get("start_time", time.time()))
     mins, secs = divmod(elapsed, 60)
+
+    current_label: str = status.get("current_label", "—")
+    chain_meta: list[dict] = status.get("chain_meta", [])
+    current_meta = next(
+        (m for m in chain_meta if m.get("label") == current_label), {}
+    )
+    pname = current_meta.get("provider", current_label.split("[")[0] if "[" in current_label else current_label)
+    model = current_meta.get("model", "")
+    display_name = _PROVIDER_LABELS.get(pname, pname.capitalize())
+    dot_color = _PROVIDER_COLORS.get(pname, "#8b949e")
+
+    # Spinner + title
     st.markdown(
         '<style>@keyframes cg-spin{to{transform:rotate(360deg);}}'
         '#cg-ring{width:40px;height:40px;border:3px solid #21262d;'
@@ -1002,6 +1040,49 @@ def _cg_spinner_html(store_key: str) -> None:
         '</div>',
         unsafe_allow_html=True,
     )
+
+    # Active provider badge
+    if display_name and display_name != "—":
+        model_str = f' · <span style="color:#9ca3af;">{model}</span>' if model else ""
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:.5rem;'
+            f'background:#0d1117;border:1px solid #21262d;border-radius:8px;'
+            f'padding:.45rem .75rem;margin-bottom:.5rem;">'
+            f'<span style="width:8px;height:8px;border-radius:50%;'
+            f'background:{dot_color};flex-shrink:0;"></span>'
+            f'<span style="color:#e2e8f0;font-size:.85rem;font-weight:600;flex:1;">'
+            f'{display_name}{model_str}</span>'
+            f'<span style="font-size:.68rem;color:#4b5563;">{current_label}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Provider chain chips
+    if len(chain_meta) > 1:
+        chips = []
+        for meta in chain_meta:
+            is_active = meta.get("label") == current_label
+            bg = "#0e3a4a" if is_active else "#0d1117"
+            border = "#0891b2" if is_active else "#21262d"
+            txt_color = "#00bcd4" if is_active else "#4b5563"
+            p = meta.get("provider", "?")
+            dot = _PROVIDER_COLORS.get(p, "#555")
+            chips.append(
+                f'<span style="display:inline-flex;align-items:center;gap:.3rem;'
+                f'background:{bg};border:1px solid {border};border-radius:6px;'
+                f'padding:.18rem .45rem;font-size:.72rem;color:{txt_color};">'
+                f'<span style="width:6px;height:6px;border-radius:50%;background:{dot};"></span>'
+                f'{_PROVIDER_LABELS.get(p, p.capitalize())}'
+                f'</span>'
+            )
+        arrow = '<span style="color:#374151;font-size:.7rem;"> → </span>'
+        st.markdown(
+            f'<div style="text-align:center;margin-bottom:.55rem;">'
+            + arrow.join(chips) + '</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Timer
     st.markdown(
         f'<div style="text-align:center;color:#7c3aed;font-size:.88rem;'
         f'font-weight:600;margin-bottom:.9rem;">⏱ {mins:02d}:{secs:02d} transcurridos</div>',
@@ -1052,7 +1133,8 @@ def _code_gen_progress_dialog(store_key: str, cancel_key: str) -> None:
         return
 
     if store.get("running"):
-        _cg_spinner_html(store_key)
+        status = api.get(f"{BACKEND}/pipeline/status") or {}
+        _cg_progress_ui(store_key, status)
         if st.button("⏹ Cancelar", use_container_width=True, key=f"cg_stop_{store_key}"):
             store["cancelled"] = True
             store["running"] = False
@@ -1104,7 +1186,8 @@ def _gen_code_modal(run_id: str) -> None:
             return
 
         if store.get("running"):
-            _cg_spinner_html(store_key)
+            status = api.get(f"{BACKEND}/pipeline/status") or {}
+            _cg_progress_ui(store_key, status)
             if st.button("⏹ Cancelar", use_container_width=True, key=f"cg_stopm_{store_key}"):
                 store["cancelled"] = True
                 store["running"] = False
@@ -2002,14 +2085,126 @@ def _section_assign_analysts(run_id: str, project: dict) -> None:
             st.rerun()
 
 
-def _section_jira_export(run_id: str, project: dict) -> None:
-    jira_export = project.get("jira_export")
+def _start_jira_thread(run_id: str, req_id: str, ref_run_id: str) -> str:
+    """Launches background Jira export thread. Returns the store_key."""
+    store_key = f"jira_{run_id}_{req_id}"
+    if store_key in _JIRA_STORE:
+        return store_key
+    _token = st.session_state.get("token")
+    _headers = {"Authorization": f"Bearer {_token}"} if _token else {}
+    store: dict = {
+        "running": True, "result": None, "error": None,
+        "cancelled": False, "start_time": time.time(),
+        "run_id": run_id, "req_id": req_id,
+    }
+    _JIRA_STORE[store_key] = store
+
+    def _worker() -> None:
+        try:
+            r = httpx.post(
+                f"{BACKEND}/projects/{run_id}/jira",
+                json={"req_id": req_id, "ref_run_id": ref_run_id},
+                headers=_headers,
+                timeout=120,
+            )
+            if not r.is_success:
+                try:
+                    detail = r.json().get("detail", r.text)
+                except Exception:
+                    detail = r.text
+                store["error"] = detail
+                return
+            store["result"] = r.json()
+        except Exception as exc:  # noqa: BLE001
+            store["error"] = str(exc)
+        finally:
+            store["running"] = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return store_key
+
+
+@st.dialog("Exportando a Jira", width="small")
+def _jira_progress_dialog(store_key: str, done_key: str) -> None:
+    """Progress dialog for Jira export thread."""
+    store = _JIRA_STORE.get(store_key)
+    if store is None:
+        st.rerun()
+        return
+
+    if store.get("running"):
+        elapsed = int(time.time() - store.get("start_time", time.time()))
+        mins, secs = divmod(elapsed, 60)
+        step_idx = min(elapsed // 9, len(_JIRA_STEPS) - 1)
+        current_step = _JIRA_STEPS[step_idx]
+
+        st.markdown(
+            '<style>@keyframes jira-spin{to{transform:rotate(360deg);}}'
+            '#jira-ring{width:40px;height:40px;border:3px solid #21262d;'
+            'border-top:3px solid #0052cc;border-radius:50%;'
+            'animation:jira-spin 1s linear infinite;margin:1rem auto .9rem;}</style>'
+            '<div id="jira-ring"></div>'
+            '<div style="text-align:center;">'
+            '<div style="font-weight:700;color:#e2e8f0;font-size:.97rem;margin-bottom:.35rem;">'
+            'Exportando a Jira</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div style="text-align:center;color:#8b949e;font-size:.85rem;margin-bottom:.6rem;">'
+            f'{current_step}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div style="text-align:center;color:#0052cc;font-size:.88rem;'
+            f'font-weight:600;margin-bottom:.9rem;">⏱ {mins:02d}:{secs:02d} transcurridos</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("⏹ Cancelar", use_container_width=True, key=f"jira_stop_{store_key}"):
+            store["cancelled"] = True
+            store["running"] = False
+            _JIRA_STORE.pop(store_key, None)
+            st.rerun()
+        time.sleep(1.5)
+        st.rerun()
+        return
+
+    # Thread done
+    result = store.get("result")
+    error  = store.get("error")
+    _JIRA_STORE.pop(store_key, None)
+
+    if store.get("cancelled"):
+        st.rerun()
+        return
+    if error:
+        st.error(f"Error exportando a Jira: {error}")
+        return
+    if result:
+        st.session_state[done_key] = result
+    st.rerun()
+
+
+def _section_req_jira_export(
+    run_id: str, req_id: str, ref_run_id: str, project: dict
+) -> None:
+    """Per-requirement Jira export section rendered inside _render_req_panel_v2."""
+    done_key = f"_jira_done_{req_id}"
+    store_key = f"jira_{run_id}_{req_id}"
+
+    # Fresh result from completed thread takes priority over persisted data
+    fresh = st.session_state.pop(done_key, None)
+    jira_exports = project.get("jira_exports") or {}
+    jira_export = fresh or jira_exports.get(req_id)
+
+    _section_divider("Exportar a Jira", "arrow-up-tray")
+
     if jira_export:
         proj_key    = jira_export.get("jira_project_key", "")
-        proj_url    = jira_export.get("jira_project_url", "#")
+        proj_url    = jira_export.get("jira_project_url") or "#"
         epic_url    = (jira_export.get("epic") or {}).get("url", "#")
         epic_key    = (jira_export.get("epic") or {}).get("key", "")
-        exported_at = jira_export.get("exported_at", "")[:16]
+        exported_at = str(jira_export.get("exported_at", ""))[:16]
         total       = jira_export.get("total_created", 0)
         st.markdown(
             f'<div style="background:#052e16;border:1px solid #166534;border-radius:8px;'
@@ -2030,20 +2225,13 @@ def _section_jira_export(run_id: str, project: dict) -> None:
             'Crea proyecto + Epic → Story → Sub-task automáticamente en Jira.</div>',
             unsafe_allow_html=True,
         )
-        if st.button("Exportar a Jira →", type="primary", use_container_width=True):
-            _do_jira_export(run_id)
-
-
-def _do_jira_export(run_id: str) -> None:
-    with st.spinner("Creando proyecto y tickets en Jira…"):
-        result = api.post(f"{BACKEND}/projects/{run_id}/jira", {})
-    if result:
-        st.success(
-            f"Proyecto **{result['jira_project_key']}** · "
-            f"Epic **{result['epic_key']}** · "
-            f"{result['total_created']} tickets."
-        )
-        st.rerun()
+        if st.button(
+            "Exportar a Jira →", type="primary",
+            use_container_width=True, key=f"jira_btn_{req_id}",
+        ):
+            _start_jira_thread(run_id, req_id, ref_run_id)
+        if store_key in _JIRA_STORE:
+            _jira_progress_dialog(store_key, done_key)
 
 
 # ── Helpers shared by artifact tabs ──────────────────────────────────────────
@@ -2880,6 +3068,10 @@ def _render_req_panel_v2(run_id: str, req: dict, project: dict) -> None:
     with tab_rep:
         _section_report_tab(sel_ref_id, ref_data)
 
+    # ── Per-req Jira export (below all tabs) ──────────────────────────────────
+    st.markdown("<div style='height:.75rem'></div>", unsafe_allow_html=True)
+    _section_req_jira_export(run_id, req_id, sel_ref_id, project)
+
 
 # ── Código Generado tab ───────────────────────────────────────────────────────
 
@@ -3234,7 +3426,7 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
     for fn in (qr.get("function_metrics") or []):
         fn_by_module.setdefault(fn.get("module", ""), []).append(fn)
 
-    for mod in modules:
+    for mod_idx, mod in enumerate(modules):
         fname       = mod.get("filename", "module.py")
         description = mod.get("description", "")
         source_code = mod.get("source_code", "")
@@ -3279,7 +3471,7 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
 
             st.markdown("---")
             st.markdown("**Decisión de revisión**")
-            action_key = f"_cda_{ref_run_id}_{fname}"
+            action_key = f"_cda_{ref_run_id}_{mod_idx}_{fname}"
             action = st.radio(
                 "Acción",
                 options=["accepted", "needs_changes"],
@@ -3296,7 +3488,7 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
                 notes = st.text_area(
                     "Observaciones",
                     value=cur.get("notes", ""),
-                    key=f"_cdn_{ref_run_id}_{fname}",
+                    key=f"_cdn_{ref_run_id}_{mod_idx}_{fname}",
                     placeholder="Describe los cambios requeridos…",
                     height=80,
                 )
@@ -3602,6 +3794,4 @@ def _section_stories_unified(run_id: str, ref_data: dict, project: dict) -> None
                     unsafe_allow_html=True,
                 )
 
-    st.markdown("<div style='height:.75rem'></div>", unsafe_allow_html=True)
-    _section_divider("Exportar a Jira", "arrow-up-tray")
-    _section_jira_export(run_id, project)
+

@@ -4,7 +4,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
@@ -483,25 +486,50 @@ async def get_logo(
 
 # ── Exportación a Jira ────────────────────────────────────────────────────────
 
+class JiraExportBody(BaseModel):
+    req_id: Optional[str] = None
+    ref_run_id: Optional[str] = None  # pipeline run_id of the specific refinement
+
+
 @router.post("/projects/{run_id}/jira", response_model=JiraExportResponse)
 async def export_to_jira(
     run_id: str,
+    body: JiraExportBody = Body(default_factory=JiraExportBody),
     current_user: dict = Depends(require_scrum_or_admin),
 ) -> JiraExportResponse:
-    """Crea proyecto Jira (si es primera vez) + Epic → Story → Sub-task."""
+    """Crea proyecto Jira (si es primera vez) + Epic → Story → Sub-task.
+
+    - run_id: project UUID
+    - body.req_id: (optional) requirement UUID — result stored per-req
+    - body.ref_run_id: (optional) pipeline run_id — used to fetch that refinement's report_data
+    """
     project = await mongo_store.get(run_id)
     if not project:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
 
-    report_data = project.get("report_data")
+    # Resolve report_data: per-req refinement or project root
+    if body.ref_run_id:
+        ref_doc = await mongo_store.get(body.ref_run_id)
+        report_data = (ref_doc or {}).get("report_data") if ref_doc else None
+        ticket_run_id = body.ref_run_id
+    else:
+        report_data = project.get("report_data")
+        ticket_run_id = run_id
+
     if not report_data:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="El proyecto no tiene report_data — completa el pipeline primero",
+            detail="No hay report_data disponible — completa el pipeline primero",
         )
 
-    jira_export = project.get("jira_export") or {}
-    jira_project_key = jira_export.get("jira_project_key")
+    # Resolve existing jira_project_key (shared across all reqs in the project)
+    jira_project_key: Optional[str] = (project.get("jira_export") or {}).get("jira_project_key")
+    if not jira_project_key:
+        for exp in (project.get("jira_exports") or {}).values():
+            k = exp.get("jira_project_key")
+            if k:
+                jira_project_key = k
+                break
 
     from jira_client import (
         _generate_project_key,
@@ -533,13 +561,12 @@ async def export_to_jira(
     # ── 2. Crear tickets ─────────────────────────────────────────────────────
     try:
         tickets = await run_in_threadpool(
-            create_tickets, jira_project_key, report_data, run_id, current_user["email"]
+            create_tickets, jira_project_key, report_data, ticket_run_id, current_user["email"]
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
     # ── 3. Persistir en MongoDB ──────────────────────────────────────────────
-    db = get_db()
     new_export = {
         "jira_project_key": jira_project_key,
         "jira_project_url": jira_project.get("url"),
@@ -547,10 +574,7 @@ async def export_to_jira(
         "exported_by": current_user["email"],
         **tickets,
     }
-    await db.projects.update_one(
-        {"run_id": run_id},
-        {"$set": {"jira_export": new_export}},
-    )
+    await mongo_store.save_jira_export(run_id, body.req_id, new_export)
 
     return JiraExportResponse(
         run_id=run_id,

@@ -356,6 +356,21 @@ async def assign_story(
     )
 
 
+async def save_jira_export(project_run_id: str, req_id: str | None, export_data: dict) -> None:
+    """Persists Jira export. Per-req if req_id given, else root jira_export."""
+    db = get_db()
+    if req_id:
+        await db.projects.update_one(
+            {"run_id": project_run_id},
+            {"$set": {f"jira_exports.{req_id}": export_data}},
+        )
+    else:
+        await db.projects.update_one(
+            {"run_id": project_run_id},
+            {"$set": {"jira_export": export_data}},
+        )
+
+
 async def unassign_story(run_id: str, story_id: str) -> bool:
     """Elimina la asignación de un desarrollador a una historia."""
     db = get_db()
