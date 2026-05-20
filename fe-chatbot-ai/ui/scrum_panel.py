@@ -1299,22 +1299,6 @@ def _render_project_detail(run_id: str) -> None:
     ) if _cparts else ""
 
     av_click = _project_avatar_clickable_html(project, size=72)
-    _pencil_svg = (
-        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>'
-        '<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>'
-        '</svg>'
-    )
-    _trash_svg = (
-        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<polyline points="3 6 5 6 21 6"/>'
-        '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>'
-        '<path d="M10 11v6"/><path d="M14 11v6"/>'
-        '<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>'
-        '</svg>'
-    )
     _has_analysis = bool((project.get("report_data") or {}).get("user_stories"))
     st.markdown(
         _DET_LOGO_CSS
@@ -1336,36 +1320,20 @@ def _render_project_detail(run_id: str) -> None:
             if project.get("description") else ""
         )
         + f'</div>'
-        f'<button id="qa-hero-addreq-btn" type="button"'
-        f' style="position:absolute;top:.55rem;right:5rem;background:rgba(8,145,178,.12);'
-        f'border:1px solid #164e63;border-radius:6px;cursor:pointer;'
-        f'padding:.28rem .65rem;line-height:1;color:#38bdf8;font-size:.78rem;font-weight:600;"'
-        f' title="Agregar requerimiento">＋ Agregar req</button>'
-        f'<button id="qa-hero-del-btn" type="button"'
-        f' style="position:absolute;top:.55rem;right:2.65rem;background:rgba(239,68,68,.08);'
-        f'border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;'
-        f'padding:.3rem .45rem;line-height:0;color:#ef4444;"'
-        f' title="Eliminar proyecto">{_trash_svg}</button>'
-        f'<button id="qa-hero-edit-btn" type="button"'
-        f' style="position:absolute;top:.55rem;right:.55rem;background:rgba(8,145,178,.08);'
-        f'border:1px solid #164e63;border-radius:6px;cursor:pointer;'
-        f'padding:.3rem .45rem;line-height:0;color:#0891b2;"'
-        f' title="Editar proyecto">{_pencil_svg}</button>'
         f'</div>',
         unsafe_allow_html=True,
     )
-    # Hidden Streamlit triggers (hidden via JS in _DET_LOGO_JS)
-    st.markdown('<div id="qa-edit-trig-anchor"></div>', unsafe_allow_html=True)
-    if st.button("✎", key=f"edit_{run_id}"):
-        _edit_project_modal(run_id, project)
-
-    st.markdown('<div id="qa-del-trig-anchor"></div>', unsafe_allow_html=True)
-    if st.button("🗑", key=f"del_{run_id}"):
-        _delete_project_dialog(run_id, project, _has_analysis)
-
-    st.markdown('<div id="qa-addreq-trig-anchor"></div>', unsafe_allow_html=True)
-    if st.button("＋", key=f"addreq_{run_id}"):
-        _add_req_to_project_dialog(run_id)
+    # ── Hero toolbar: native Streamlit buttons ─────────────────────────────────
+    _col_add, _col_edit, _col_del, _ = st.columns([1.2, 1, 1, 4.8])
+    with _col_add:
+        if st.button("＋ Agregar req", key=f"hero_add_{run_id}", use_container_width=True):
+            _add_req_to_project_dialog(run_id)
+    with _col_edit:
+        if st.button("✎ Editar", key=f"hero_edit_{run_id}", use_container_width=True):
+            _edit_project_modal(run_id, project)
+    with _col_del:
+        if st.button("🗑 Eliminar", key=f"hero_del_{run_id}", use_container_width=True):
+            _delete_project_dialog(run_id, project, _has_analysis)
 
     # ── Hidden logo uploader (JS-triggered via click on .qa-dlog-wrap) ───────
     st.markdown('<div id="qa-det-logo-anchor"></div>', unsafe_allow_html=True)
@@ -1587,11 +1555,9 @@ _DET_LOGO_CSS = """<style>
 .qa-dlog-wrap:hover .qa-dlog-ov{opacity:1;}
 .qa-dlog-ov-txt{color:#e2e8f0;font-size:.58rem;font-family:sans-serif;font-weight:600;
   letter-spacing:.03em;text-transform:uppercase;}
-#qa-hero-edit-btn:hover{background:rgba(8,145,178,.18)!important;color:#38bdf8!important;border-color:#0891b2!important;}
-#qa-hero-del-btn:hover{background:rgba(239,68,68,.2)!important;color:#f87171!important;border-color:#ef4444!important;}
 </style>"""
 
-# JS: logo upload + edit button + custom team multiselect
+# JS: logo upload + custom team multiselect
 _DET_LOGO_JS = """<script>
 (function(){
   var D=window.parent.document,W=window.parent;
@@ -1642,31 +1608,6 @@ _DET_LOGO_JS = """<script>
     wrap._qaLogoAttached=true;
     wrap.addEventListener('click',function(){triggerLogoUpload();});
   }
-
-  // ── Generic HTML-button → hidden Streamlit trigger helper ────────────────
-  function wireHtmlBtn(htmlBtnId, anchId, flagProp){
-    var anch=D.getElementById(anchId);
-    if(anch){
-      var c=childOfVB(anch);
-      if(c&&c.nextElementSibling) c.nextElementSibling.style.display='none';
-    }
-    var btn=D.getElementById(htmlBtnId);
-    if(!btn||btn[flagProp])return;
-    btn[flagProp]=true;
-    btn.addEventListener('click',function(e){
-      e.preventDefault();e.stopPropagation();
-      var a=D.getElementById(anchId);
-      if(!a)return;
-      var cc=childOfVB(a);
-      if(!cc||!cc.nextElementSibling)return;
-      var sb=cc.nextElementSibling.querySelector('button');
-      if(sb)sb.click();
-    });
-  }
-
-  function setupEditBtn(){   wireHtmlBtn('qa-hero-edit-btn',   'qa-edit-trig-anchor',  '_qaEditOk');   }
-  function setupDelBtn(){    wireHtmlBtn('qa-hero-del-btn',    'qa-del-trig-anchor',   '_qaDelOk');    }
-  function setupAddReqBtn(){ wireHtmlBtn('qa-hero-addreq-btn','qa-addreq-trig-anchor','_qaAddReqOk'); }
 
   // ── Wire ✕ remove-member buttons → hidden Streamlit button ─────────────
   function wireRmBtns(){
@@ -1768,13 +1709,13 @@ _DET_LOGO_JS = """<script>
     var _t=null;
     W._qaDetLogoObs=new MutationObserver(function(){
       clearTimeout(_t);_t=setTimeout(function(){
-        hideLogoUL();setupEditBtn();setupDelBtn();setupAddReqBtn();setupTeamMS();wireRmBtns();
+        hideLogoUL();setupTeamMS();wireRmBtns();
       },180);
     });
     W._qaDetLogoObs.observe(D.body,{childList:true,subtree:true});
   }
 
-  setTimeout(function(){hideLogoUL();attach();setupEditBtn();setupDelBtn();setupAddReqBtn();setupTeamMS();wireRmBtns();},400);
+  setTimeout(function(){hideLogoUL();attach();setupTeamMS();wireRmBtns();},400);
 })();
 </script>"""
 
@@ -2500,6 +2441,37 @@ def _section_report_tab(run_id: str, project: dict) -> None:
                 unsafe_allow_html=True,
             )
 
+    # ── Code quality tiles (if available) ────────────────────────────────────
+    ref_data_local = _get_refinement_data(run_id) if run_id else {}
+    qs_rep = ref_data_local.get("quality_summary") or {}
+    cr_rep = ref_data_local.get("coverage_report") or {}
+    cmmi_rep = ref_data_local.get("cmmi_l3_compliant")
+    if qs_rep or cr_rep:
+        st.markdown(
+            '<div style="color:#6b7280;font-size:.72rem;text-transform:uppercase;'
+            'letter-spacing:.06em;margin:.4rem 0 .3rem;">Calidad de código generado</div>',
+            unsafe_allow_html=True,
+        )
+        qc1, qc2, qc3, qc4 = st.columns(4)
+        mi_val = qs_rep.get("maintainability_index")
+        _qtiles = [
+            (qc1, "MI", f'{mi_val:.0f}/100' if mi_val is not None else "—", "#f97316"),
+            (qc2, "Fnc > umbral", str(qs_rep.get("functions_exceeding_threshold", "—")), "#f87171"),
+            (qc3, "Branch Cov.", f'{cr_rep.get("branch_coverage_pct", 0):.0f}%' if cr_rep else "—", "#4ade80"),
+            (qc4, "CMMI L3", "✓ Sí" if cmmi_rep else ("✗ No" if cmmi_rep is False else "—"), "#4ade80" if cmmi_rep else "#f87171"),
+        ]
+        for col, label, value, color in _qtiles:
+            with col:
+                st.markdown(
+                    f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+                    f'padding:.5rem .7rem;text-align:center;margin-bottom:.5rem;">'
+                    f'<div style="color:#6b7280;font-size:.65rem;text-transform:uppercase;'
+                    f'letter-spacing:.07em;margin-bottom:.15rem;">{label}</div>'
+                    f'<div style="color:{color};font-size:1.1rem;font-weight:700;">{value}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
     st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
 
     if st.button(
@@ -2900,20 +2872,38 @@ _CODE_REVIEW_BADGE = {
 }
 
 
+def _badge(text: str, bg: str, fg: str) -> str:
+    return (
+        f'<span style="background:{bg};color:{fg};padding:.15rem .55rem;'
+        f'border-radius:8px;font-size:.75rem;font-weight:600;">{text}</span>'
+    )
+
+
 def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
     """Tab HITL para revisar código generado: módulos Python + tests Pytest."""
     # Priority: freshly generated (in session) → persisted in MongoDB
     code_result = st.session_state.get(f"_code_result_{ref_run_id}")
     if code_result is None:
-        code_result = {}
-        saved_code  = ref_data.get("generated_code")
-        saved_tests = ref_data.get("generated_tests")
-        if saved_code is not None:
-            code_result["generated_code"]  = saved_code
-            code_result["generated_tests"] = saved_tests or []
+        code_result = {
+            "generated_code":       ref_data.get("generated_code"),
+            "generated_tests":      ref_data.get("generated_tests"),
+            "quality_report":       ref_data.get("quality_report"),
+            "quality_summary":      ref_data.get("quality_summary"),
+            "traceability_matrix":  ref_data.get("traceability_matrix"),
+            "coverage_report":      ref_data.get("coverage_report"),
+            "code_review":          ref_data.get("code_review"),
+            "cmmi_l3_compliant":    ref_data.get("cmmi_l3_compliant"),
+            "requirements_coverage_pct": ref_data.get("requirements_coverage_pct"),
+            "branch_coverage_pct":  ref_data.get("branch_coverage_pct"),
+        }
 
-    modules = code_result.get("generated_code") or []
-    tests   = code_result.get("generated_tests") or []
+    modules  = code_result.get("generated_code") or []
+    tests    = code_result.get("generated_tests") or []
+    qs       = code_result.get("quality_summary") or {}
+    qr       = code_result.get("quality_report") or {}
+    tm       = code_result.get("traceability_matrix") or {}
+    cr       = code_result.get("coverage_report") or {}
+    v4_review = code_result.get("code_review") or {}
 
     if not modules:
         st.markdown(
@@ -2929,75 +2919,310 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
         )
         return
 
-    # Existing review decisions saved in MongoDB
-    existing_decisions: dict[str, dict] = {}
-    for d in (ref_data.get("code_decisions") or []):
-        existing_decisions[d.get("filename", "")] = d
-
+    # Existing human HITL decisions saved via /pipeline/accept-code
+    existing_decisions: dict[str, dict] = {
+        d.get("filename", ""): d
+        for d in (ref_data.get("code_decisions") or [])
+    }
     existing_global = ref_data.get("code_review_status")
 
-    # Header summary
-    total_m = len(modules)
-    total_t = len(tests)
-    st.markdown(
-        f'<div style="display:flex;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;">'
+    # ── Metrics bar ──────────────────────────────────────────────────────────
+    total_m   = len(modules)
+    total_t   = len(tests)
+    cc_exceed = qs.get("functions_exceeding_threshold", 0)
+    sec_high  = qs.get("high_severity_count", 0)
+    req_cov   = tm.get("requirements_coverage_pct") or code_result.get("requirements_coverage_pct") or 0
+    br_cov    = cr.get("branch_coverage_pct") or code_result.get("branch_coverage_pct") or 0
+    cmmi_ok   = tm.get("cmmi_l3_compliant") or code_result.get("cmmi_l3_compliant") or False
+    v4_status = v4_review.get("review_status", "")
+
+    badges_html = (
         f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:8px;'
         f'padding:.25rem .7rem;font-size:.82rem;color:#93c5fd;">📦 {total_m} módulos</span>'
         f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:8px;'
         f'padding:.25rem .7rem;font-size:.82rem;color:#86efac;">🧪 {total_t} tests</span>'
-        + (f'<span style="margin-left:auto;">{_CODE_REVIEW_BADGE.get(existing_global,"")}</span>'
-           if existing_global else "")
-        + '</div>',
+    )
+    if qs:
+        cc_c = "#f87171" if cc_exceed > 0 else "#6ee7b7"
+        badges_html += _badge(f"🔬 CC {cc_exceed} supraumbral", "#1a0a0a" if cc_exceed else "#0a1a0a", cc_c)
+        sec_c = "#f87171" if sec_high > 0 else "#6ee7b7"
+        badges_html += _badge(f"🛡 {sec_high} HIGH", "#1a0a0a" if sec_high else "#0a1a0a", sec_c)
+    if req_cov:
+        rc_c = "#4ade80" if req_cov >= 80 else "#fbbf24"
+        badges_html += _badge(f"🗺 Req {req_cov:.0f}%", "#0a1a0a" if req_cov >= 80 else "#1a1200", rc_c)
+    if br_cov:
+        bc_c = "#4ade80" if br_cov >= 80 else "#fbbf24"
+        badges_html += _badge(f"🎯 Branch {br_cov:.0f}%", "#0a1a0a" if br_cov >= 80 else "#1a1200", bc_c)
+    if cmmi_ok:
+        badges_html += _badge("✓ CMMI L3", "#0a1a0a", "#4ade80")
+    if v4_status:
+        _v4_label = {"approved": "🤖 Auto-aprobado", "pending_review": "🤖 Auto-review PENDING",
+                     "rejected": "🤖 Auto-rechazado", "needs_changes": "🤖 Auto: requiere cambios"}.get(v4_status, f"🤖 {v4_status}")
+        _v4_bg = {"approved": "#052e16", "pending_review": "#1a1200", "rejected": "#1a0808"}.get(v4_status, "#1e2533")
+        _v4_fg = {"approved": "#4ade80", "pending_review": "#fbbf24", "rejected": "#f87171"}.get(v4_status, "#93c5fd")
+        badges_html += _badge(_v4_label, _v4_bg, _v4_fg)
+    if existing_global:
+        badges_html += f'<span style="margin-left:auto;">{_CODE_REVIEW_BADGE.get(existing_global,"")}</span>'
+
+    st.markdown(
+        f'<div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;">{badges_html}</div>',
         unsafe_allow_html=True,
     )
 
-    # Per-module HITL review
+    # ── V4 auto-review notice ─────────────────────────────────────────────────
+    if v4_status and not existing_global:
+        st.info("🤖 **Revisión automática V4 disponible** — los resultados del agente se muestran como punto de partida. Guarda tus decisiones para registrar la revisión humana.")
+
+    # ── Quality dashboard ─────────────────────────────────────────────────────
+    if qr:
+        with st.expander("📊 Métricas de calidad del código", expanded=False):
+            fn_metrics = qr.get("function_metrics") or []
+            sec_findings = qr.get("security_findings") or []
+            iso_cov = qr.get("iso_25010_coverage") or []
+            mi = qr.get("maintainability_index")
+
+            if mi is not None:
+                mi_c = "#4ade80" if mi >= 20 else "#f87171"
+                st.markdown(
+                    f'<div style="margin-bottom:.6rem;">'
+                    f'{_badge(f"🔧 MI {mi:.1f}/100", "#0d1117", mi_c)}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            if fn_metrics:
+                st.markdown("**Complejidad por función**")
+                rows = ""
+                for f in fn_metrics:
+                    exceed = f.get("exceeds_threshold", False)
+                    cc_val = f.get("cyclomatic_complexity", 0)
+                    cog    = f.get("cognitive_complexity", 0)
+                    band   = f.get("cc_band", "A")
+                    cc_clr = "#f87171" if exceed else "#c9d1d9"
+                    rows += (
+                        f'<tr style="border-bottom:1px solid #21262d;">'
+                        f'<td style="padding:.3rem .5rem;color:#93c5fd;font-size:.78rem;">{f.get("function_name","")}</td>'
+                        f'<td style="padding:.3rem .5rem;color:#6b7280;font-size:.78rem;">{f.get("module","")}</td>'
+                        f'<td style="padding:.3rem .5rem;color:{cc_clr};font-size:.78rem;font-weight:{"700" if exceed else "400"};">{cc_val}</td>'
+                        f'<td style="padding:.3rem .5rem;color:#c9d1d9;font-size:.78rem;">{cog}</td>'
+                        f'<td style="padding:.3rem .5rem;color:#a78bfa;font-size:.78rem;">{band}</td>'
+                        f'<td style="padding:.3rem .5rem;font-size:.78rem;">{"🔴" if exceed else "✅"}</td>'
+                        f'</tr>'
+                    )
+                st.markdown(
+                    f'<table style="width:100%;border-collapse:collapse;margin-bottom:.75rem;">'
+                    f'<thead><tr style="border-bottom:1px solid #30363d;">'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;text-align:left;">Función</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;text-align:left;">Módulo</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;">CC</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;">CogC</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;">Banda</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;">¿Excede?</th>'
+                    f'</tr></thead><tbody>{rows}</tbody></table>',
+                    unsafe_allow_html=True,
+                )
+
+            if sec_findings:
+                st.markdown("**Hallazgos de seguridad**")
+                rows = ""
+                for s in sec_findings:
+                    sev = s.get("severity", "low")
+                    sev_c = {"high": "#f87171", "medium": "#fbbf24", "low": "#6b7280"}.get(sev, "#6b7280")
+                    rows += (
+                        f'<tr style="border-bottom:1px solid #21262d;">'
+                        f'<td style="padding:.3rem .5rem;color:#a78bfa;font-size:.78rem;">{s.get("test_id","")}</td>'
+                        f'<td style="padding:.3rem .5rem;color:{sev_c};font-size:.78rem;font-weight:700;">{sev.upper()}</td>'
+                        f'<td style="padding:.3rem .5rem;color:#6b7280;font-size:.78rem;">{s.get("module","")}</td>'
+                        f'<td style="padding:.3rem .5rem;color:#6b7280;font-size:.78rem;">{s.get("line_number","")}</td>'
+                        f'<td style="padding:.3rem .5rem;color:#c9d1d9;font-size:.78rem;">{s.get("description","")}</td>'
+                        f'</tr>'
+                    )
+                st.markdown(
+                    f'<table style="width:100%;border-collapse:collapse;margin-bottom:.75rem;">'
+                    f'<thead><tr style="border-bottom:1px solid #30363d;">'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;text-align:left;">ID</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;">Sev.</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;text-align:left;">Módulo</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;">Línea</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;text-align:left;">Descripción</th>'
+                    f'</tr></thead><tbody>{rows}</tbody></table>',
+                    unsafe_allow_html=True,
+                )
+
+            if iso_cov:
+                st.markdown("**Cobertura ISO 25010**")
+                rows = ""
+                for ic in iso_cov:
+                    st_val = ic.get("status", "")
+                    st_c = {"MEASURED": "#4ade80", "NOT_APPLICABLE": "#6b7280",
+                             "REQUIRES_HUMAN_JUDGMENT": "#fbbf24"}.get(st_val, "#c9d1d9")
+                    rows += (
+                        f'<tr style="border-bottom:1px solid #21262d;">'
+                        f'<td style="padding:.3rem .5rem;color:#93c5fd;font-size:.78rem;">{ic.get("characteristic","")}</td>'
+                        f'<td style="padding:.3rem .5rem;color:{st_c};font-size:.78rem;">{st_val}</td>'
+                        f'<td style="padding:.3rem .5rem;color:#8b949e;font-size:.78rem;">{ic.get("verdict","")}</td>'
+                        f'</tr>'
+                    )
+                st.markdown(
+                    f'<table style="width:100%;border-collapse:collapse;">'
+                    f'<thead><tr style="border-bottom:1px solid #30363d;">'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;text-align:left;">Característica</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;">Estado</th>'
+                    f'<th style="padding:.3rem .5rem;color:#6b7280;font-size:.72rem;text-align:left;">Veredicto</th>'
+                    f'</tr></thead><tbody>{rows}</tbody></table>',
+                    unsafe_allow_html=True,
+                )
+
+    # ── Traceability matrix ───────────────────────────────────────────────────
+    if tm:
+        with st.expander("🗺 Matriz de trazabilidad CMMI L3", expanded=False):
+            orphan_sc = tm.get("orphan_scenarios") or []
+            orphan_ts = tm.get("orphan_tests") or []
+            fwd       = tm.get("forward") or []
+            bwd       = tm.get("backward") or []
+
+            col_a, col_b, col_c, col_d = st.columns(4)
+            for col, lbl, val, clr in [
+                (col_a, "Req. cubiertos", f'{tm.get("requirements_coverage_pct", 0):.0f}%', "#4ade80"),
+                (col_b, "Tests justif.", f'{tm.get("tests_justified_pct", 0):.0f}%', "#a78bfa"),
+                (col_c, "Escenarios huérfanos", str(len(orphan_sc)), "#f87171" if orphan_sc else "#4ade80"),
+                (col_d, "Tests huérfanos", str(len(orphan_ts)), "#f87171" if orphan_ts else "#4ade80"),
+            ]:
+                with col:
+                    st.markdown(
+                        f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+                        f'padding:.5rem;text-align:center;">'
+                        f'<div style="color:#6b7280;font-size:.68rem;text-transform:uppercase;">{lbl}</div>'
+                        f'<div style="color:{clr};font-size:1.15rem;font-weight:700;">{val}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+
+            if fwd:
+                st.markdown("**Forward: escenario → tests**")
+                for node in fwd:
+                    is_orphan = node.get("status") == "ORPHAN_FORWARD"
+                    clr = "#f87171" if is_orphan else "#4ade80"
+                    covering = ", ".join(node.get("covering_tests") or []) or "—"
+                    st.markdown(
+                        f'<div style="background:#0d1117;border-left:3px solid {clr};'
+                        f'border-radius:0 6px 6px 0;padding:.3rem .65rem;margin-bottom:.2rem;">'
+                        f'<span style="color:{clr};font-size:.78rem;font-weight:600;">'
+                        f'{node.get("scenario_name","")}</span>'
+                        f'<span style="color:#6b7280;font-size:.75rem;"> → {covering}</span>'
+                        + (' <span style="color:#f87171;font-size:.7rem;">⚠ huérfano</span>' if is_orphan else "")
+                        + '</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            if bwd:
+                st.markdown("**Backward: test → escenarios**")
+                for node in bwd:
+                    is_orphan = node.get("status") == "ORPHAN_BACKWARD"
+                    clr = "#f87171" if is_orphan else "#a78bfa"
+                    scenarios = ", ".join(node.get("justifying_scenarios") or []) or "—"
+                    st.markdown(
+                        f'<div style="background:#0d1117;border-left:3px solid {clr};'
+                        f'border-radius:0 6px 6px 0;padding:.3rem .65rem;margin-bottom:.2rem;">'
+                        f'<span style="color:{clr};font-size:.78rem;font-weight:600;">'
+                        f'{node.get("test_name","")}</span>'
+                        f'<span style="color:#6b7280;font-size:.75rem;"> ← {scenarios}</span>'
+                        + (' <span style="color:#f87171;font-size:.7rem;">⚠ huérfano</span>' if is_orphan else "")
+                        + '</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            # Coverage report
+            if cr:
+                br = cr.get("branch_coverage_pct", 0)
+                ln = cr.get("line_coverage_pct", 0)
+                meets = cr.get("meets_threshold", False)
+                st.markdown(
+                    f'<div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;">'
+                    + _badge(f"Branch {br:.0f}%", "#052e16" if br >= 80 else "#1a1200", "#4ade80" if br >= 80 else "#fbbf24")
+                    + _badge(f"Line {ln:.0f}%", "#052e16" if ln >= 80 else "#1a1200", "#4ade80" if ln >= 80 else "#fbbf24")
+                    + (_badge("✓ Umbral OK", "#052e16", "#4ade80") if meets else _badge("✗ Bajo umbral (80%)", "#1a0808", "#f87171"))
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ── Per-module code + HITL ────────────────────────────────────────────────
     decisions_state_key = f"_code_decisions_{ref_run_id}"
     if decisions_state_key not in st.session_state:
-        # Seed from existing decisions if any
+        # Seed: human decisions > V4 auto-review change_history > default accepted
+        v4_changes: dict[str, dict] = {}
+        for ch in (v4_review.get("change_history") or []):
+            tgt = ch.get("target", "")
+            if tgt:
+                v4_changes[tgt] = {"action": ch.get("action", "accepted"), "notes": ch.get("notes") or ""}
         st.session_state[decisions_state_key] = {
             m["filename"]: {
-                "action": existing_decisions.get(m["filename"], {}).get("action", "accepted"),
-                "notes":  existing_decisions.get(m["filename"], {}).get("notes", ""),
+                "action": (
+                    existing_decisions.get(m["filename"], {}).get("action")
+                    or v4_changes.get(m["filename"], {}).get("action", "accepted")
+                ),
+                "notes": (
+                    existing_decisions.get(m["filename"], {}).get("notes")
+                    or v4_changes.get(m["filename"], {}).get("notes", "")
+                ),
             }
             for m in modules
         }
 
     decisions_map: dict = st.session_state[decisions_state_key]
 
-    # Build test lookup by target_module
     tests_by_module: dict[str, list] = {}
     for t in tests:
-        tgt = t.get("target_module", "")
-        tests_by_module.setdefault(tgt, []).append(t)
+        tests_by_module.setdefault(t.get("target_module", ""), []).append(t)
+
+    fn_by_module: dict[str, list] = {}
+    for fn in (qr.get("function_metrics") or []):
+        fn_by_module.setdefault(fn.get("module", ""), []).append(fn)
 
     for mod in modules:
         fname       = mod.get("filename", "module.py")
         description = mod.get("description", "")
         source_code = mod.get("source_code", "")
         mod_tests   = tests_by_module.get(fname, [])
-        cur         = decisions_map.get(fname, {"action": "accepted", "notes": ""})
+        mod_fns     = fn_by_module.get(fname, [])
+        cur         = decisions_map.setdefault(fname, {"action": "accepted", "notes": ""})
+        has_issues  = any(f.get("exceeds_threshold") for f in mod_fns)
 
-        with st.expander(f"📄 `{fname}`", expanded=False):
+        label_prefix = "🔴 " if has_issues else ""
+        with st.expander(f"{label_prefix}📄 `{fname}`", expanded=False):
             if description:
                 st.markdown(
                     f'<div style="color:#9ca3af;font-size:.83rem;margin-bottom:.6rem;">{description}</div>',
                     unsafe_allow_html=True,
                 )
 
-            # Source code
+            if mod_fns:
+                fn_badges = " ".join(
+                    _badge(
+                        f"{f['function_name']} CC{f['cyclomatic_complexity']}",
+                        "#1a0808" if f.get("exceeds_threshold") else "#0d1117",
+                        "#f87171" if f.get("exceeds_threshold") else "#6b7280",
+                    )
+                    for f in mod_fns
+                )
+                st.markdown(
+                    f'<div style="margin-bottom:.5rem;">{fn_badges}</div>',
+                    unsafe_allow_html=True,
+                )
+
             st.markdown("**Código fuente**")
             st.code(source_code, language="python")
 
-            # Tests for this module
             if mod_tests:
                 st.markdown("**Tests Pytest**")
                 for t in mod_tests:
-                    tname = t.get("test_name", "test_file.py")
-                    st.markdown(f"<small style='color:#6b7280;'>`{tname}`</small>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<small style='color:#6b7280;'>`{t.get('test_name','test_file.py')}`</small>",
+                        unsafe_allow_html=True,
+                    )
                     st.code(t.get("source_code", ""), language="python")
 
-            # HITL decision
             st.markdown("---")
             st.markdown("**Decisión de revisión**")
             action_key = f"_cda_{ref_run_id}_{fname}"
@@ -3014,11 +3239,10 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
 
             notes = ""
             if action == "needs_changes":
-                notes_key = f"_cdn_{ref_run_id}_{fname}"
                 notes = st.text_area(
                     "Observaciones",
                     value=cur.get("notes", ""),
-                    key=notes_key,
+                    key=f"_cdn_{ref_run_id}_{fname}",
                     placeholder="Describe los cambios requeridos…",
                     height=80,
                 )
@@ -3026,7 +3250,6 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
 
     # Global decision + save
     st.markdown("---")
-    global_key = f"_cdg_{ref_run_id}"
     col_g, col_s = st.columns([2, 1])
     with col_g:
         global_decision = st.radio(
@@ -3034,7 +3257,7 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
             options=["accepted", "needs_changes", "rejected"],
             format_func=lambda v: {"accepted": "✓ Aprobar todo", "needs_changes": "⚠ Requiere cambios", "rejected": "✗ Rechazar"}.get(v, v),
             index=0,
-            key=global_key,
+            key=f"_cdg_{ref_run_id}",
             horizontal=True,
         )
     with col_s:

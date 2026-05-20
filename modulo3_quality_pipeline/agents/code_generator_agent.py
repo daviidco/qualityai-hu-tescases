@@ -31,12 +31,14 @@ Tu tarea es generar código Python limpio y tests Pytest a partir de escenarios 
 
 REGLAS OBLIGATORIAS:
 1. Genera exactamente UN módulo Python y UN archivo de test por feature.
-2. El código debe ser pythónico, con type hints, docstrings concisos y sin comentarios obvios.
-3. Los tests deben incluir el decorador @pytest.mark.scenario("<scenario_id>") en cada función
+2. El archivo de test debe contener EXACTAMENTE UNA FUNCIÓN DE TEST por cada escenario Gherkin.
+   Si hay N escenarios, debe haber N funciones `test_*` — una por cada escenario.
+3. El código debe ser pythónico, con type hints, docstrings concisos y sin comentarios obvios.
+4. Los tests deben incluir el decorador @pytest.mark.scenario("<scenario_id>") en cada función
    de test para mantener trazabilidad CMMI L3.
-4. Usa nombres descriptivos que reflejen el dominio del negocio.
-5. No dependencias externas más allá de la stdlib y pytest.
-6. Umbrales de calidad: CC < 10 (funciones simples), sin lógica anidada innecesaria.
+5. Usa nombres descriptivos que reflejen el dominio del negocio.
+6. No dependencias externas más allá de la stdlib y pytest.
+7. Umbrales de calidad: CC < 10 (funciones simples), sin lógica anidada innecesaria.
 
 PATRONES DE CÓDIGO DE REFERENCIA (base de conocimiento Katary):
 {rag_context}
@@ -53,8 +55,15 @@ Responde SOLO con JSON válido en este esquema exacto:
 """
 
 _ECO_SYSTEM_PROMPT = """\
-Eres un senior Python developer. Genera código Python y tests Pytest mínimos
-(función principal + 1 test positivo + 1 test negativo) para los escenarios Gherkin dados.
+Eres un senior Python developer. Genera código Python y tests Pytest
+para los escenarios Gherkin dados.
+
+REGLAS OBLIGATORIAS:
+1. Genera exactamente UN módulo Python y UN archivo de test por feature.
+2. El archivo de test debe contener EXACTAMENTE UNA FUNCIÓN DE TEST por cada escenario Gherkin.
+   Si hay N escenarios, debe haber N funciones `test_*` con sus respectivos decoradores.
+3. Tests con decorador @pytest.mark.scenario("<scenario_id>") para trazabilidad CMMI L3.
+4. El código debe ser pythónico, con type hints y sin dependencias externas más allá de stdlib + pytest.
 
 PATRONES DE REFERENCIA:
 {rag_context}
@@ -159,15 +168,24 @@ class CodeGeneratorAgent(AbstractBaseAgent[GherkinTestSuite, CodeGenerationResul
         self, raw: dict[str, Any], feature: GherkinFeature
     ) -> tuple[GeneratedCodeModule, GeneratedTest]:
         """Convierte la respuesta JSON del LLM en modelos Pydantic validados."""
-        # Extraer scenario_ids de los escenarios de la feature si el LLM no los proporcionó
-        default_ids = [s.acceptance_criterion_id for s in feature.scenarios]
+        expected_ids = [s.acceptance_criterion_id for s in feature.scenarios]
+        n_expected = len(expected_ids)
 
         filename = raw.get("filename") or f"{feature.name.lower().replace(' ', '_')}.py"
         source_code = raw.get("source_code", "# código no generado")
         description = raw.get("description", feature.description[:100])
         test_name = raw.get("test_name") or f"test_{filename}"
         test_source = raw.get("test_source_code", "# tests no generados")
-        scenario_ids = raw.get("scenario_ids") or default_ids
+        scenario_ids = raw.get("scenario_ids") or expected_ids
+
+        # ── Validación de cobertura ───────────────────────────────────────
+        n_generated = len(scenario_ids)
+        if n_generated < n_expected:
+            print(
+                f"    ⚠️  Cobertura incompleta: {n_generated}/{n_expected} escenarios cubiertos "
+                f"en '{feature.name}'. Se usarán los {n_expected} esperados."
+            )
+            scenario_ids = expected_ids  # garantiza que traceability matrix tenga todos los IDs
 
         if not filename.endswith(".py"):
             filename += ".py"

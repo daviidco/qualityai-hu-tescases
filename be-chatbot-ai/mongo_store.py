@@ -282,16 +282,42 @@ async def link_pipeline(
 
 
 async def save_generated_code(run_id: str, code_data: dict) -> None:
-    """Guarda el código generado en el documento del refinamiento (pipeline run)."""
+    """Guarda el código generado + análisis V2/V3/V4 en el documento del refinamiento."""
     db = get_db()
+    update: dict = {
+        "generated_code": code_data.get("generated_code", []),
+        "generated_tests": code_data.get("generated_tests", []),
+        "code_generation_status": "generated",
+        "code_generated_at": datetime.now(timezone.utc),
+    }
+
+    # V2: Análisis estático (radon, complexipy, bandit)
+    if "quality_report" in code_data:
+        update["quality_report"] = code_data["quality_report"]
+    if "quality_summary" in code_data:
+        update["quality_summary"] = code_data["quality_summary"]
+
+    # V3: Trazabilidad CMMI L3 + cobertura
+    if "traceability_matrix" in code_data:
+        update["traceability_matrix"] = code_data["traceability_matrix"]
+    if "coverage_report" in code_data:
+        update["coverage_report"] = code_data["coverage_report"]
+    if "cmmi_l3_compliant" in code_data:
+        update["cmmi_l3_compliant"] = code_data["cmmi_l3_compliant"]
+    if "requirements_coverage_pct" in code_data:
+        update["requirements_coverage_pct"] = code_data["requirements_coverage_pct"]
+    if "branch_coverage_pct" in code_data:
+        update["branch_coverage_pct"] = code_data["branch_coverage_pct"]
+    if "line_coverage_pct" in code_data:
+        update["line_coverage_pct"] = code_data["line_coverage_pct"]
+
+    # V4: Revisión de código
+    if "code_review" in code_data:
+        update["code_review"] = code_data["code_review"]
+
     await db.projects.update_one(
         {"run_id": run_id},
-        {"$set": {
-            "generated_code": code_data.get("generated_code", []),
-            "generated_tests": code_data.get("generated_tests", []),
-            "code_generation_status": "generated",
-            "code_generated_at": datetime.now(timezone.utc),
-        }},
+        {"$set": update},
     )
 
 

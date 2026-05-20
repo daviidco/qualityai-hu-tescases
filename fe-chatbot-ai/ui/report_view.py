@@ -633,6 +633,81 @@ def render_report_native(report_data: dict, html_content: str | None = None,
                 extra=f"background:{i_bg};",
             )
 
+    # ── 08: Calidad del Código Generado ──────────────────────────────────────
+    quality_summary  = report_data.get("quality_summary") or {}
+    quality_report   = report_data.get("quality_report") or {}
+    traceability     = report_data.get("traceability_matrix") or {}
+    coverage_report  = report_data.get("coverage_report") or {}
+    cmmi_compliant   = report_data.get("cmmi_l3_compliant")
+    if quality_summary or quality_report or traceability:
+        _section_header("08", "Calidad del Código Generado",
+                         "Métricas V2 (CC, CogC, Bandit, ISO 25010), trazabilidad CMMI L3 y cobertura de ramas")
+
+        # KPI tiles
+        mi_v   = quality_summary.get("maintainability_index")
+        cc_exc = quality_summary.get("functions_exceeding_threshold", 0)
+        br_cov = coverage_report.get("branch_coverage_pct", 0)
+        sec_h  = quality_summary.get("high_severity_count", 0)
+        kc1, kc2, kc3, kc4 = st.columns(4)
+        for _col, _lbl, _val, _clr in [
+            (kc1, "Mant. Index", f'{mi_v:.0f}/100' if mi_v is not None else "—", _C_NAVY),
+            (kc2, "Fnc > umbral", str(cc_exc), "#ef4444" if cc_exc > 0 else "#4ade80"),
+            (kc3, "Branch Cov.", f'{br_cov:.0f}%', "#4ade80" if br_cov >= 80 else "#f59e0b"),
+            (kc4, "CMMI L3", "✓ Compliant" if cmmi_compliant else ("✗ No" if cmmi_compliant is False else "—"),
+             "#4ade80" if cmmi_compliant else "#ef4444"),
+        ]:
+            with _col:
+                st.markdown(
+                    f'<div style="background:{_C_CARD};border:1px solid {_C_CARD_BDR};'
+                    f'border-radius:10px;padding:.7rem;text-align:center;margin-bottom:.75rem;">'
+                    f'<div style="color:{_C_MUTED};font-size:.68rem;text-transform:uppercase;'
+                    f'letter-spacing:.07em;margin-bottom:.25rem;">{_lbl}</div>'
+                    f'<div style="color:{_clr};font-size:1.35rem;font-weight:700;">{_val}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # Security findings
+        sec_findings = quality_report.get("security_findings") or []
+        if sec_findings:
+            st.markdown(
+                f'<div style="color:{_C_TEXT};font-weight:600;font-size:.9rem;margin:.5rem 0 .35rem;">'
+                f'🛡 Hallazgos de seguridad ({len(sec_findings)})</div>',
+                unsafe_allow_html=True,
+            )
+            for sf in sec_findings:
+                sev   = sf.get("severity", "low")
+                sev_c = {"high": "#ef4444", "medium": "#f59e0b", "low": "#6b7280"}.get(sev, "#6b7280")
+                sev_bg= {"high": "#1a0808", "medium": "#1a1200", "low": "#0d1117"}.get(sev, "#0d1117")
+                _card(
+                    f'<span style="color:{sev_c};font-weight:700;font-size:.8rem;">{sf.get("test_id","")} [{sev.upper()}]</span>'
+                    f'<span style="color:{_C_MUTED};font-size:.8rem;"> · {sf.get("module","")} L{sf.get("line_number","")}</span>'
+                    f'<div style="color:{_C_TEXT};font-size:.82rem;margin-top:.2rem;">{sf.get("description","")}</div>',
+                    border_left=sev_c, extra=f"background:{sev_bg};"
+                )
+
+        # Traceability summary
+        if traceability:
+            req_pct  = traceability.get("requirements_coverage_pct", 0)
+            orphan_s = traceability.get("orphan_scenarios") or []
+            orphan_t = traceability.get("orphan_tests") or []
+            st.markdown(
+                f'<div style="color:{_C_TEXT};font-weight:600;font-size:.9rem;margin:.6rem 0 .35rem;">'
+                f'🗺 Trazabilidad CMMI L3</div>',
+                unsafe_allow_html=True,
+            )
+            _card(
+                f'<div style="display:flex;gap:1.5rem;flex-wrap:wrap;">'
+                f'<span style="color:{_C_MUTED};font-size:.85rem;">Req. cubiertos: '
+                f'<strong style="color:{"#4ade80" if req_pct >= 80 else "#f59e0b"};">{req_pct:.0f}%</strong></span>'
+                f'<span style="color:{_C_MUTED};font-size:.85rem;">Escenarios huérfanos: '
+                f'<strong style="color:{"#ef4444" if orphan_s else "#4ade80"};">{len(orphan_s)}</strong></span>'
+                f'<span style="color:{_C_MUTED};font-size:.85rem;">Tests huérfanos: '
+                f'<strong style="color:{"#ef4444" if orphan_t else "#4ade80"};">{len(orphan_t)}</strong></span>'
+                f'</div>',
+                border_left="#4ade80" if cmmi_compliant else "#ef4444",
+            )
+
     # ── Footer ────────────────────────────────────────────────────────────────
     duration = report_data.get("total_duration_seconds") or 0
     version  = report_data.get("module_version", "3.0.0")

@@ -174,6 +174,15 @@ class ProjectDetailResponse(BaseModel):
     pdf_base64: str
     generated_code: Optional[list] = None
     generated_tests: Optional[list] = None
+    quality_report: Optional[dict] = None
+    quality_summary: Optional[dict] = None
+    traceability_matrix: Optional[dict] = None
+    coverage_report: Optional[dict] = None
+    code_review: Optional[dict] = None
+    cmmi_l3_compliant: Optional[bool] = None
+    requirements_coverage_pct: Optional[float] = None
+    branch_coverage_pct: Optional[float] = None
+    line_coverage_pct: Optional[float] = None
     code_decisions: Optional[list] = None
     code_review_status: Optional[str] = None
     code_reviewer: Optional[str] = None

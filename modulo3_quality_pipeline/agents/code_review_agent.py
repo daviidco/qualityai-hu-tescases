@@ -43,11 +43,21 @@ class CodeReviewAgent:
         self,
         result: CodeGenerationResult,
         reviewer_name: str,
+        auto: bool = False,
     ) -> CodeGenerationResult:
-        """Conduce la revisión interactiva y actualiza el CodeReviewMetadata."""
+        """Conduce la revisión interactiva y actualiza el CodeReviewMetadata.
+
+        Args:
+            result: CodeGenerationResult con el código generado.
+            reviewer_name: Nombre del revisor humano.
+            auto: Si True, auto-aprueba sin interacción (modo headless/web).
+        """
         if not result.generated_code:
             print("  [CodeReviewAgent] Sin módulos que revisar.")
             return result
+
+        if auto:
+            return self._auto_review(result, reviewer_name)
 
         print("\n" + "=" * 60)
         print("👨‍💻 STAGE 6: Revisión de Código — Senior Developer")
@@ -108,6 +118,34 @@ class CodeReviewAgent:
 
         result.review = review
         print(f"\n  ✅ Revisión registrada: {verdict_status.value} por {reviewer_name}")
+        return result
+
+    def _auto_review(
+        self,
+        result: CodeGenerationResult,
+        reviewer_name: str,
+    ) -> CodeGenerationResult:
+        """Auto-aprueba todos los módulos sin interacción (modo web/headless)."""
+        changes: list[CodeReviewChange] = []
+        for module in result.generated_code:
+            changes.append(
+                CodeReviewChange(
+                    reviewer=reviewer_name,
+                    action="approved",
+                    target=module.filename,
+                    notes="Auto-aprobado (modo web)",
+                )
+            )
+
+        result.review = CodeReviewMetadata(
+            review_status=CodeReviewStatus.APPROVED,
+            version=1,
+            approved_by=reviewer_name,
+            approved_at=datetime.now(),
+            reviewer_feedback="Auto-aprobado — pendiente de revisión HITL en frontend.",
+            change_history=changes,
+        )
+        print(f"  ✅ Revisión auto-aprobada ({len(changes)} módulos) por {reviewer_name}")
         return result
 
     # ── Helpers de UI ─────────────────────────────────────────────────────────

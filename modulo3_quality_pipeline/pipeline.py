@@ -320,7 +320,14 @@ class QualityPipeline:
     # ── Métodos para HITL web (3 fases separadas) ────────────────────────────
 
     def generate_code_from_features(self, features: list[dict]) -> dict:
-        """Reconstruye GherkinTestSuite a partir de features serializadas y genera código."""
+        """Reconstruye GherkinTestSuite a partir de features serializadas y genera código.
+
+        Ejecuta pipeline completo de generación y análisis:
+          V1: CodeGeneratorAgent       → generated_code + generated_tests
+          V2: StaticAnalysisAgent       → quality_report (CC, CogC, Bandit, ISO 25010)
+          V3: TraceabilityAgent         → traceability_matrix + coverage_report
+          V4: CodeReviewAgent (auto)    → review metadata (auto-aprobado)
+        """
         from .contracts.contract_b import (
             GherkinFeature, GherkinScenario, GherkinStep,
             GherkinTestSuite, ScenarioType, QualityCharacteristic,
@@ -376,9 +383,44 @@ class QualityPipeline:
             raise ValueError("No se pudieron reconstruir features para generar código")
 
         suite = GherkinTestSuite(features=reconstructed)
-        contract_d = self._code_agent.process(suite)
 
-        return {
+        # ── V1: Generación de código ────────────────────────────────────────
+        print("\n🔧 V1: Generando código Python + tests Pytest...")
+        contract_d = self._code_agent.process(suite)
+        print(f"  ✅ {contract_d.total_modules} módulos + {contract_d.total_tests} tests")
+
+        # ── V2: Análisis estático ────────────────────────────────────────────
+        if self._static_agent is not None:
+            print("\n🔬 V2: Análisis estático (radon CC, complexipy, bandit)...")
+            try:
+                contract_d = self._static_agent.analyze(contract_d)
+            except Exception as exc:
+                print(f"  ⚠️  V2 falló: {exc}")
+        else:
+            print("\n  ⏭ V2: StaticAnalysisAgent no disponible — saltando")
+
+        # ── V3: Trazabilidad CMMI L3 + cobertura ────────────────────────────
+        if self._traceability_agent is not None:
+            print("\n🗺  V3: Trazabilidad CMMI L3 + cobertura de ramas...")
+            try:
+                contract_d = self._traceability_agent.trace(contract_d, suite)
+            except Exception as exc:
+                print(f"  ⚠️  V3 falló: {exc}")
+        else:
+            print("\n  ⏭ V3: TraceabilityAgent no disponible — saltando")
+
+        # ── V4: Revisión de código (auto, sin stdin) ────────────────────────
+        if self._review_agent is not None:
+            print("\n👨‍💻 V4: Revisión de código (auto-aprobada)...")
+            try:
+                contract_d = self._review_agent.review(contract_d, reviewer_name="system", auto=True)
+            except Exception as exc:
+                print(f"  ⚠️  V4 falló: {exc}")
+        else:
+            print("\n  ⏭ V4: CodeReviewAgent no disponible — saltando")
+
+        # ── Construir respuesta enriquecida ─────────────────────────────────
+        result: dict = {
             "generated_code": [
                 {
                     "filename": m.filename,
@@ -400,6 +442,39 @@ class QualityPipeline:
             "total_modules": contract_d.total_modules,
             "total_tests": contract_d.total_tests,
         }
+
+        # V2: Quality report (métricas de complejidad + seguridad)
+        if contract_d.quality_report is not None:
+            qr = contract_d.quality_report
+            result["quality_report"] = qr.model_dump()
+            # Aplanar resumen ejecutivo para facilitar consumo en frontend
+            result["quality_summary"] = {
+                "functions_exceeding_threshold": qr.functions_exceeding_threshold,
+                "maintainability_index": qr.maintainability_index,
+                "security_findings_count": len(qr.security_findings),
+                "high_severity_count": sum(
+                    1 for f in qr.security_findings
+                    if f.severity.value == "high"
+                ),
+                "total_functions_analyzed": len(qr.function_metrics),
+            }
+
+        # V3: Traceability + coverage
+        if contract_d.traceability_matrix is not None:
+            result["traceability_matrix"] = contract_d.traceability_matrix.model_dump()
+            result["cmmi_l3_compliant"] = contract_d.traceability_matrix.cmmi_l3_compliant
+            result["requirements_coverage_pct"] = contract_d.traceability_matrix.requirements_coverage_pct
+
+        if contract_d.coverage_report is not None:
+            result["coverage_report"] = contract_d.coverage_report.model_dump()
+            result["branch_coverage_pct"] = contract_d.coverage_report.branch_coverage_pct
+            result["line_coverage_pct"] = contract_d.coverage_report.line_coverage_pct
+
+        # V4: Review metadata
+        if contract_d.review is not None:
+            result["code_review"] = contract_d.review.model_dump()
+
+        return result
 
     def detect_ambiguities(self, requirement: str) -> list[dict]:
         """Fase 1-a web: solo detección. Sin llamada al LLM."""
