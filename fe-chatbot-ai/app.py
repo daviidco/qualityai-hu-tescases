@@ -333,6 +333,14 @@ def main() -> None:
         # Auto-analyze iniciado desde el panel Scrum (requerimiento pre-seleccionado)
         _auto_req = st.session_state.pop("_auto_analyze", None)
         if _auto_req:
+            # Propagar contexto de proyecto/requerimiento para que handle_finalize
+            # pueda llamar link_pipeline() y guardar resultados en el proyecto
+            _auto_proj = st.session_state.pop("_auto_analyze_proj", None)
+            _auto_req_id = st.session_state.pop("_auto_analyze_req", None)
+            if _auto_proj:
+                st.session_state.current_project_draft_id = _auto_proj
+            if _auto_req_id:
+                st.session_state.current_req_id = _auto_req_id
             handle_analyze(_auto_req)
             return
 

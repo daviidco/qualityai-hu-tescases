@@ -1,11 +1,15 @@
 import base64
 import logging
 import uuid
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+
+# Volumen donde se persisten los reportes HTML por proyecto
+_REPORTS_DIR = Path("/app/storage/reports")
 
 import mongo_store
 from dependencies import get_current_user
@@ -17,6 +21,7 @@ from schemas import (
     AcceptanceCriterionOut, UserStoryOut,
     FinalizeRequest, FinalizeResponse, PipelineSummary,
     ProjectListResponse, ProjectDetailResponse, ProjectMeta,
+    GenerateCodeRequest, AcceptCodeRequest,
 )
 
 router = APIRouter(tags=["Pipeline HITL"])
@@ -246,6 +251,14 @@ async def finalize(
         except Exception as link_exc:
             logger.exception("link_pipeline failed for draft %s: %s", req.project_draft_id, link_exc)
 
+        # Persist HTML report to project_assets volume for long-term file access
+        try:
+            report_path = _REPORTS_DIR / req.project_draft_id / f"{run_id}.html"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(result["html_content"], encoding="utf-8")
+        except Exception as file_exc:
+            logger.exception("HTML report file write failed: %s", file_exc)
+
     return FinalizeResponse(
         pipeline_run_id=run_id,
         html_content=result["html_content"],
@@ -253,6 +266,60 @@ async def finalize(
         pdf_base64=pdf_b64,
         summary=PipelineSummary(**summary_data),
     )
+
+
+# ── Generación de código ─────────────────────────────────────────────────────
+
+@router.post("/pipeline/generate-code")
+async def generate_code(
+    req: GenerateCodeRequest,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Genera módulos Python + tests Pytest desde las features de un refinamiento."""
+    doc = await mongo_store.get(req.run_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Refinamiento no encontrado.")
+
+    features = (doc.get("report_data") or {}).get("features") or []
+    if not features:
+        raise HTTPException(status_code=400, detail="No hay features disponibles para generar código.")
+
+    try:
+        result = await run_in_threadpool(
+            request.app.state.pipeline.generate_code_from_features,
+            features,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+    try:
+        await mongo_store.save_generated_code(req.run_id, result)
+    except Exception as save_exc:
+        logger.exception("save_generated_code failed: %s", save_exc)
+
+    return result
+
+
+@router.post("/pipeline/accept-code")
+async def accept_code(
+    req: AcceptCodeRequest,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Guarda las decisiones HITL (aceptar/cambios) sobre el código generado."""
+    decisions = [d.model_dump() for d in req.decisions]
+    try:
+        await mongo_store.save_code_decisions(
+            run_id=req.run_id,
+            decisions=decisions,
+            global_decision=req.global_decision,
+            reviewer=req.reviewer or _user.get("email", ""),
+        )
+    except Exception as exc:
+        logger.exception("save_code_decisions failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"ok": True, "run_id": req.run_id, "global_decision": req.global_decision}
 
 
 # ── Historial de proyectos ────────────────────────────────────────────────────

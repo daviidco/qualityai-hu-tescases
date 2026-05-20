@@ -327,8 +327,27 @@ def handle_finalize(
     st.session_state.current_project_draft_id = None
     st.session_state.current_project_name = ""
     st.session_state.current_req_id = None
-    st.session_state.analyst_selected_project = None
-    st.session_state.view = "report"
+
+    prev_view = st.session_state.pop("_prev_view", None)
+
+    if draft_id:
+        # Pre-select the analyzed requirement so the detail opens on it
+        if req_id:
+            st.session_state[f"_sel_req_{draft_id}"] = req_id
+        # Clear any stale refinement cache so the new refinement loads fresh
+        for _k in list(st.session_state.keys()):
+            if _k.startswith("_ref_cache_"):
+                del st.session_state[_k]
+
+        if prev_view == "scrum_projects":
+            st.session_state.scrum_selected_project = draft_id
+            st.session_state.view = "scrum_projects"
+        else:
+            st.session_state.analyst_selected_project = draft_id
+            st.session_state.view = "analyst_projects"
+    else:
+        st.session_state.analyst_selected_project = None
+        st.session_state.view = "report"
     st.rerun()
 
 

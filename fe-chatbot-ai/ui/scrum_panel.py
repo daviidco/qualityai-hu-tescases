@@ -4,13 +4,20 @@ from __future__ import annotations
 import base64
 import io
 import re
+import threading
+import time
 
+import httpx
 import streamlit as st
 import streamlit.components.v1 as components
 
 import api
 from config import BACKEND
 from ui.icons import icon
+
+# Module-level store for background code-generation threads.
+# Key: store_key.  Value: dict with running/result/error/cancelled/start_time.
+_CODE_GEN_STORE: dict[str, dict] = {}
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
@@ -44,7 +51,7 @@ def _show_toast(msg: str, kind: str = "success") -> None:
     msg_esc = msg.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
     js = f"""<script>
 (function(){{
-  var D=window.parent.document,B=D.body;
+  var W=window.parent,D=W.document,B=D.body;
   if(!D.getElementById('qa-tn-css')){{
     var s=D.createElement('style');s.id='qa-tn-css';
     s.textContent=`
@@ -76,15 +83,15 @@ def _show_toast(msg: str, kind: str = "success") -> None:
     +'<div class="qa-tn-msg">{msg_esc}</div>'
     +'</div>'
     +'<button class="qa-tn-close"'
-    +' onclick="document.getElementById(\\\'qa-tn\\\').classList.remove(\\\'qa-tn-in\\\')">'
+    +' onclick="W.clearTimeout(W.__qaTnTid);D.getElementById(\\\'qa-tn\\\').classList.remove(\\\'qa-tn-in\\\')">'
     +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
     +' stroke="#9ca3af" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>'
     +'</button>'
     +'</div>';
-  requestAnimationFrame(function(){{
+  W.requestAnimationFrame(function(){{
     t.classList.add('qa-tn-in');
-    clearTimeout(t._tid);
-    t._tid=setTimeout(function(){{t.classList.remove('qa-tn-in');}},4500);
+    W.clearTimeout(W.__qaTnTid);
+    W.__qaTnTid=W.setTimeout(function(){{t.classList.remove('qa-tn-in');}},4500);
   }});
 }})();
 </script>"""
@@ -93,7 +100,20 @@ def _show_toast(msg: str, kind: str = "success") -> None:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+_GEN_CODE_CSS = (
+    '<style>'
+    '[class*="st-key-gen_code_"] button:not([disabled]){'
+    'background:#7c3aed!important;border-color:#7c3aed!important;color:#fff!important;}'
+    '[class*="st-key-gen_code_"] button:not([disabled]):hover{'
+    'background:#6d28d9!important;border-color:#6d28d9!important;}'
+    '[class*="st-key-gen_code_"] button[disabled]{'
+    'background:transparent!important;border-color:#374151!important;color:#6b7280!important;opacity:.5!important;}'
+    '</style>'
+)
+
+
 def render_scrum_panel() -> None:
+    st.markdown(_GEN_CODE_CSS, unsafe_allow_html=True)
     if st.session_state.get("scrum_selected_project"):
         _render_project_detail(st.session_state.scrum_selected_project)
         return
@@ -122,38 +142,7 @@ def render_scrum_panel() -> None:
     }
   }
 
-  function childOfVB(el){
-    while(el&&el.parentElement){
-      if(el.parentElement.getAttribute('data-testid')==='stVerticalBlock') return el;
-      el=el.parentElement;
-    }
-    return null;
-  }
-
-  function wireHtmlBtn(htmlBtnId, anchId, flagProp){
-    var anch=D.getElementById(anchId);
-    if(anch){
-      var c=childOfVB(anch);
-      if(c&&c.nextElementSibling) c.nextElementSibling.style.display='none';
-    }
-    var btn=D.getElementById(htmlBtnId);
-    if(!btn||btn[flagProp])return;
-    btn[flagProp]=true;
-    btn.addEventListener('click',function(e){
-      e.preventDefault();e.stopPropagation();
-      var a=D.getElementById(anchId);
-      if(!a)return;
-      var cc=childOfVB(a);
-      if(!cc||!cc.nextElementSibling)return;
-      var sb=cc.nextElementSibling.querySelector('button');
-      if(sb)sb.click();
-    });
-  }
-
-  setTimeout(function(){resize();D.querySelectorAll('[id^="del_btn_"]').forEach(function(el){
-      var rid=el.id.replace('del_btn_','');
-      wireHtmlBtn('del_btn_'+rid,'del_trig_'+rid,'_qaDelOk_'+rid);
-    });},400);
+  setTimeout(function(){resize();},400);
   W.addEventListener('resize',resize);
   D.querySelectorAll('[data-sel-proj]').forEach(function(el){el.remove();});
 })();
@@ -181,15 +170,23 @@ _LIST_CARD_CSS = (
     'a.qa-pname{color:#e2e8f0;font-weight:600;font-size:1.02rem;text-decoration:underline;'
     'text-underline-offset:3px;text-decoration-color:#334155;display:inline-block;line-height:1.3;}'
     'a.qa-pname:hover{text-decoration-color:#60a5fa;}'
-    '.qa-del-btn{cursor:pointer;display:flex;align-items:center;justify-content:center;width:100%;'
-    'min-height:2rem;height:2rem;background:rgba(239,68,68,.08);border:1px solid #7f1d1d;border-radius:6px;'
-    'transition:background .12s,border-color .12s;}'
-    '.qa-del-btn:hover{background:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
     # Analizar buttons: green when enabled
     '[class*="st-key-analyze_"] button:not([disabled]){'
     'background:#16a34a!important;border-color:#16a34a!important;color:#fff!important;}'
     '[class*="st-key-analyze_"] button:not([disabled]):hover{'
     'background:#15803d!important;border-color:#15803d!important;}'
+    # Gen Code buttons: purple when enabled, transparent when disabled
+    '[class*="st-key-gen_code_"] button:not([disabled]){'
+    'background:#7c3aed!important;border-color:#7c3aed!important;color:#fff!important;}'
+    '[class*="st-key-gen_code_"] button:not([disabled]):hover{'
+    'background:#6d28d9!important;border-color:#6d28d9!important;}'
+    '[class*="st-key-gen_code_"] button[disabled]{'
+    'background:transparent!important;border-color:#374151!important;color:#6b7280!important;opacity:.5!important;}'
+    # Native delete button: red icon style
+    '[class*="st-key-del_card_"] button{'
+    'background:rgba(239,68,68,.08)!important;border:1px solid #7f1d1d!important;color:#ef4444!important;}'
+    '[class*="st-key-del_card_"] button:hover{'
+    'background:rgba(239,68,68,.18)!important;border-color:#ef4444!important;}'
     # Delete confirm button: red primary
     '[class*="st-key-_del_confirm_btn"] button{'
     'background:#dc2626!important;border-color:#991b1b!important;}'
@@ -406,24 +403,19 @@ def _project_card(p: dict, user_map: dict | None = None) -> None:
     req_count    = p.get("req_count", 0)
     req_analyzed = p.get("req_analyzed", 0)
     status       = p.get("status", "created")
-    review_badge = _REVIEW_BADGE.get(p.get("review_status") or "", "")
     client       = p.get("client_name", "")
     analysts     = p.get("assigned_analysts") or []
 
-    # Req-based status badge
+    # Req-based status badge — always blue
     if req_count == 0:
         req_badge = f'<span style="background:#1a1f2e;color:#4b5563;{_B}">Sin reqs.</span>'
     elif status == "analyzing":
         req_badge = _STATUS_BADGE.get("analyzing", "")
-    elif req_analyzed >= req_count:
-        req_badge = (f'<span style="background:#14532d;color:#86efac;{_B}">'
-                     f'{req_analyzed} de {req_count} analizados</span>')
     else:
-        # 0/N → blue, X/N → amber; always show "X de N analizados"
-        _bg = "#1e3a5f" if req_analyzed == 0 else "#3b2007"
-        _fg = "#93c5fd" if req_analyzed == 0 else "#fcd34d"
-        req_badge = (f'<span style="background:{_bg};color:{_fg};{_B}">'
-                     f'{req_analyzed} de {req_count} analizados</span>')
+        req_badge = (
+            f'<span style="background:#1e3a5f;color:#93c5fd;{_B}">'
+            f'{req_analyzed} de {req_count} analizados</span>'
+        )
 
     contact_name  = p.get("contact_name") or ""
     contact_email = p.get("contact_email") or ""
@@ -444,38 +436,37 @@ def _project_card(p: dict, user_map: dict | None = None) -> None:
     _sep = '<span style="color:#374151;margin:0 .2rem;">·</span>'
     meta_parts: list[str] = []
     if client:
-        meta_parts.append(f'<span style="color:#6b7280;font-size:.88rem;">{client}</span>')
+        meta_parts.append(f'<span style="color:#6b7280;font-size:.82rem;">{client}</span>')
     if contact_name:
-        meta_parts.append(f'<span style="color:#6b7280;font-size:.88rem;">{contact_name}</span>')
+        meta_parts.append(f'<span style="color:#6b7280;font-size:.82rem;">{contact_name}</span>')
     if contact_email:
         meta_parts.append(
-            f'<a href="mailto:{contact_email}" style="color:#5b8dd9;font-size:.88rem;'
+            f'<a href="mailto:{contact_email}" style="color:#5b8dd9;font-size:.82rem;'
             f'text-decoration:none;">{contact_email}</a>'
         )
     meta_html = (
-        f'<div style="margin-top:.15rem;display:flex;align-items:center;flex-wrap:wrap;">'
+        f'<div style="margin-top:.12rem;display:flex;align-items:center;flex-wrap:wrap;">'
         + _sep.join(meta_parts) + "</div>"
     ) if meta_parts else ""
 
     desc     = p.get("description") or ""
     desc_html = (
-        f'<div style="color:#6b7280;font-size:.88rem;margin-top:.12rem;">'
+        f'<div style="color:#6b7280;font-size:.82rem;margin-top:.1rem;">'
         f'{desc[:90]}{"…" if len(desc) > 90 else ""}</div>'
     ) if desc else ""
 
     _has_analysis = bool((p.get("summary") or {}).get("total_stories"))
-    col_info, col_analyze, col_del = st.columns([5, 1, 0.55])
+    col_info, col_analyze, col_gencode, col_del = st.columns([5, 1, 1.5, 0.55])
     with col_info:
+        # Layout: [logo]  [title · badge]
+        #                 [desc / meta / team]
         st.markdown(
-            f'<a class="qa-pname" href="?_sel_proj={_rid}" target="_self">{pname}</a>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f'<div style="display:flex;align-items:flex-start;gap:.5rem;margin-top:.15rem;">'
+            f'<div style="display:flex;align-items:flex-start;gap:.6rem;margin:.1rem 0 .15rem;">'
             f'{av}'
             f'<div style="min-width:0;flex:1;">'
-            f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:.3rem;margin-bottom:.1rem;">'
-            f'{req_badge}{review_badge}'
+            f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:.45rem;margin-bottom:.18rem;">'
+            f'<a class="qa-pname" href="?_sel_proj={_rid}" target="_self">{pname}</a>'
+            f'{req_badge}'
             f'</div>'
             f'{desc_html}{meta_html}{team_html}'
             f'</div></div>',
@@ -490,14 +481,17 @@ def _project_card(p: dict, user_map: dict | None = None) -> None:
             type="primary",
         ):
             _analyze_modal(_rid)
+    has_analyzed = req_analyzed > 0
+    with col_gencode:
+        if st.button(
+            "Gen Code",
+            key=f"gen_code_{_rid}",
+            use_container_width=True,
+            disabled=not has_analyzed,
+        ):
+            _gen_code_modal(_rid)
     with col_del:
-        st.markdown(
-            f'<span class="qa-del-btn" id="del_btn_{_rid}">'
-            f'{icon("trash",14,"#ef4444")}</span>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(f'<div id="del_trig_{_rid}"></div>', unsafe_allow_html=True)
-        if st.button("​", key=f"del_hid_{_rid}"):
+        if st.button("🗑", key=f"del_card_{_rid}", use_container_width=True):
             _delete_project_dialog(_rid, p, _has_analysis)
     st.divider()
 
@@ -968,6 +962,231 @@ def _inject_create_form_js() -> None:
     components.html(js, height=0, scrolling=False)
 
 
+# ── Gen Code helpers ─────────────────────────────────────────────────────────
+
+def _cg_spinner_html(store_key: str) -> None:
+    """Renders the progress UI for a running code-gen thread (inline, no dialog)."""
+    store = _CODE_GEN_STORE.get(store_key, {})
+    elapsed = int(time.time() - store.get("start_time", time.time()))
+    mins, secs = divmod(elapsed, 60)
+    st.markdown(
+        '<style>@keyframes cg-spin{to{transform:rotate(360deg);}}'
+        '#cg-ring{width:40px;height:40px;border:3px solid #21262d;'
+        'border-top:3px solid #7c3aed;border-radius:50%;'
+        'animation:cg-spin 1s linear infinite;margin:1rem auto .9rem;}</style>'
+        '<div id="cg-ring"></div>'
+        '<div style="text-align:center;">'
+        '<div style="font-weight:700;color:#e2e8f0;font-size:.97rem;margin-bottom:.35rem;">'
+        'Generando código Python y Pytest tests</div>'
+        '<div style="color:#6b7280;font-size:.83rem;margin-bottom:.7rem;">'
+        'El agente está generando módulos de código y tests unitarios.<br>'
+        'Este proceso puede tardar entre 1 y 3 minutos.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="text-align:center;color:#7c3aed;font-size:.88rem;'
+        f'font-weight:600;margin-bottom:.9rem;">⏱ {mins:02d}:{secs:02d} transcurridos</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _start_cg_thread(store_key: str, ref_run_id: str, project_id: str) -> None:
+    """Launches the background code-gen HTTP call and registers it in _CODE_GEN_STORE."""
+    if store_key in _CODE_GEN_STORE:
+        return
+    _token = st.session_state.get("token")
+    _headers = {"Authorization": f"Bearer {_token}"} if _token else {}
+    store: dict = {
+        "running": True, "result": None, "error": None,
+        "cancelled": False, "start_time": time.time(),
+        "ref_run_id": ref_run_id,
+    }
+    _CODE_GEN_STORE[store_key] = store
+
+    def _worker() -> None:
+        try:
+            r = httpx.post(
+                f"{BACKEND}/pipeline/generate-code",
+                json={"run_id": ref_run_id, "project_id": project_id},
+                headers=_headers,
+                timeout=300,
+            )
+            r.raise_for_status()
+            store["result"] = r.json()
+        except Exception as exc:  # noqa: BLE001
+            store["error"] = str(exc)
+        finally:
+            store["running"] = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+# ── Progress dialog (requirements tab) ───────────────────────────────────────
+
+@st.dialog("Generando código", width="small")
+def _code_gen_progress_dialog(store_key: str, cancel_key: str) -> None:
+    """Progress-only dialog used from the requirements tab (refinement already known)."""
+    store = _CODE_GEN_STORE.get(store_key)
+    if store is None:
+        st.session_state.pop(cancel_key, None)
+        st.rerun()
+        return
+
+    if store.get("running"):
+        _cg_spinner_html(store_key)
+        if st.button("⏹ Cancelar", use_container_width=True, key=f"cg_stop_{store_key}"):
+            store["cancelled"] = True
+            store["running"] = False
+            _CODE_GEN_STORE.pop(store_key, None)
+            st.session_state.pop(cancel_key, None)
+            st.rerun()
+        time.sleep(2)
+        st.rerun()
+        return
+
+    # Thread finished
+    result = store.get("result")
+    error  = store.get("error")
+    _CODE_GEN_STORE.pop(store_key, None)
+    st.session_state.pop(cancel_key, None)
+
+    if store.get("cancelled"):
+        st.rerun()
+        return
+    if error:
+        st.error(f"Error al generar código: {error}")
+        return
+    if result:
+        ref_run_id = store.get("ref_run_id", "")
+        st.session_state[f"_code_result_{ref_run_id}"] = result
+        st.session_state.pop(f"_ref_cache_{ref_run_id}", None)
+    st.rerun()
+
+
+# ── Select + generate dialog (project card) ───────────────────────────────────
+
+@st.dialog("Generar Código", width="large")
+def _gen_code_modal(run_id: str) -> None:
+    """Two-phase dialog: phase 1 = select refinement, phase 2 = show progress inline."""
+    phase_key = f"_cg_phase_{run_id}"
+    sk_key    = f"_cg_sk_{run_id}"
+    phase     = st.session_state.get(phase_key, "select")
+
+    # ── Phase 2: running ──────────────────────────────────────────────────────
+    if phase == "running":
+        store_key = st.session_state.get(sk_key, "")
+        store     = _CODE_GEN_STORE.get(store_key)
+
+        if store is None:
+            # Thread already finished and store was cleaned up
+            st.session_state.pop(phase_key, None)
+            st.session_state.pop(sk_key, None)
+            st.rerun()
+            return
+
+        if store.get("running"):
+            _cg_spinner_html(store_key)
+            if st.button("⏹ Cancelar", use_container_width=True, key=f"cg_stopm_{store_key}"):
+                store["cancelled"] = True
+                store["running"] = False
+                _CODE_GEN_STORE.pop(store_key, None)
+                st.session_state.pop(phase_key, None)
+                st.session_state.pop(sk_key, None)
+                st.rerun()
+            time.sleep(2)
+            st.rerun()
+            return
+
+        # Thread done
+        result = store.get("result")
+        error  = store.get("error")
+        _CODE_GEN_STORE.pop(store_key, None)
+        st.session_state.pop(phase_key, None)
+        st.session_state.pop(sk_key, None)
+
+        if store.get("cancelled"):
+            st.rerun()
+            return
+        if error:
+            st.error(f"Error al generar código: {error}")
+            return
+        if result:
+            ref_run_id = store.get("ref_run_id", "")
+            st.session_state[f"_code_result_{ref_run_id}"] = result
+            st.session_state.pop(f"_ref_cache_{ref_run_id}", None)
+            st.success("Código generado. Ábrelo en el tab **Código Generado** del requerimiento.")
+            if st.button("Cerrar", use_container_width=True):
+                st.rerun()
+        return
+
+    # ── Phase 1: select refinement ────────────────────────────────────────────
+    reqs = api.get(f"{BACKEND}/projects/{run_id}/requirements") or []
+    options: list[dict] = []
+    for req in reqs:
+        req_title = req.get("title", req.get("req_id", ""))
+        for ref in (req.get("refinements") or []):
+            summary = ref.get("summary") or {}
+            if summary.get("total_stories", 0) > 0:
+                options.append({
+                    "run_id":          ref.get("run_id", ""),
+                    "req_title":       req_title,
+                    "created_at":      str(ref.get("created_at", ""))[:16],
+                    "total_stories":   summary.get("total_stories", 0),
+                    "total_scenarios": summary.get("total_scenarios", 0),
+                    "review_status":   ref.get("review_status") or "",
+                    "created_by":      ref.get("created_by", ""),
+                })
+
+    if not options:
+        st.info("No hay refinamientos analizados disponibles para este proyecto.")
+        if st.button("Cerrar", use_container_width=True):
+            st.rerun()
+        return
+
+    opt_map = {o["run_id"]: o for o in options}
+
+    selected_id = st.selectbox(
+        "Seleccionar refinamiento analizado",
+        options=list(opt_map.keys()),
+        format_func=lambda k: (
+            f"{opt_map[k]['req_title']} · {opt_map[k]['created_at']} · "
+            f"{opt_map[k]['total_stories']} HU · {opt_map[k]['total_scenarios']} tests"
+        ),
+    )
+
+    selected = opt_map.get(selected_id or "")
+    if selected:
+        rev_badge = _REVIEW_BADGE.get(selected["review_status"], "")
+        st.markdown(
+            f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+            f'padding:.65rem .9rem;margin:.4rem 0;">'
+            f'<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.3rem;">'
+            f'{rev_badge}'
+            f'<span style="color:#6b7280;font-size:.8rem;">por {selected["created_by"]}</span>'
+            f'</div>'
+            f'<div style="color:#8b949e;font-size:.82rem;">'
+            f'{selected["total_stories"]} historias de usuario &nbsp;·&nbsp; '
+            f'{selected["total_scenarios"]} test cases</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    col_c, col_g = st.columns([1, 2])
+    with col_c:
+        if st.button("Cancelar", use_container_width=True):
+            st.rerun()
+    with col_g:
+        if st.button("Generar Código →", type="primary", use_container_width=True,
+                     disabled=not selected_id):
+            ref_run_id = selected_id or ""
+            store_key  = f"cg_{ref_run_id}"
+            _start_cg_thread(store_key, ref_run_id, run_id)
+            st.session_state[phase_key] = "running"
+            st.session_state[sk_key]    = store_key
+            st.rerun()
+
+
 # ── Analizar requerimiento (modal) ───────────────────────────────────────────
 
 @st.dialog("Iniciar análisis", width="large")
@@ -1107,8 +1326,7 @@ def _render_project_detail(run_id: str) -> None:
         f'<div style="font-size:1.3rem;font-weight:700;color:#e2e8f0;'
         f'line-height:1.25;word-break:break-word;">'
         f'{project.get("project_name","Proyecto")}</div>'
-        f'<div style="margin-top:.4rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;">'
-        f'{status_b}{review_b}</div>'
+        f''
         f'<div style="color:#4b5563;font-size:.76rem;margin-top:.35rem;">{meta_str}</div>'
         f'{contact_html}'
         + (
@@ -1118,6 +1336,11 @@ def _render_project_detail(run_id: str) -> None:
             if project.get("description") else ""
         )
         + f'</div>'
+        f'<button id="qa-hero-addreq-btn" type="button"'
+        f' style="position:absolute;top:.55rem;right:5rem;background:rgba(8,145,178,.12);'
+        f'border:1px solid #164e63;border-radius:6px;cursor:pointer;'
+        f'padding:.28rem .65rem;line-height:1;color:#38bdf8;font-size:.78rem;font-weight:600;"'
+        f' title="Agregar requerimiento">＋ Agregar req</button>'
         f'<button id="qa-hero-del-btn" type="button"'
         f' style="position:absolute;top:.55rem;right:2.65rem;background:rgba(239,68,68,.08);'
         f'border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;'
@@ -1139,6 +1362,10 @@ def _render_project_detail(run_id: str) -> None:
     st.markdown('<div id="qa-del-trig-anchor"></div>', unsafe_allow_html=True)
     if st.button("🗑", key=f"del_{run_id}"):
         _delete_project_dialog(run_id, project, _has_analysis)
+
+    st.markdown('<div id="qa-addreq-trig-anchor"></div>', unsafe_allow_html=True)
+    if st.button("＋", key=f"addreq_{run_id}"):
+        _add_req_to_project_dialog(run_id)
 
     # ── Hidden logo uploader (JS-triggered via click on .qa-dlog-wrap) ───────
     st.markdown('<div id="qa-det-logo-anchor"></div>', unsafe_allow_html=True)
@@ -1162,23 +1389,73 @@ def _render_project_detail(run_id: str) -> None:
     components.html(_DET_LOGO_JS, height=0, scrolling=False)
 
     # ── Tabs de detalle ───────────────────────────────────────────────────────
+    reqs        = api.get(f"{BACKEND}/projects/{run_id}/requirements") or []
+    _req_count  = len(reqs)
     _team_count = len(project.get("assigned_analysts") or [])
-    tab_team, tab_reqs, tab_hu, tab_ac, tab_tc, tab_rep = st.tabs([
-        f"Equipo ({_team_count})", "Requerimientos", "Historias de usuario",
-        "Criterios de aceptación", "Test cases", "Reporte",
+    tab_team, tab_reqs = st.tabs([
+        f"Equipo ({_team_count})",
+        f"Requerimientos ({_req_count})",
     ])
     with tab_team:
         _section_assign_analysts(run_id, project)
     with tab_reqs:
-        _section_requirement(run_id, project)
-    with tab_hu:
-        _section_user_stories(run_id, project)
-    with tab_ac:
-        _section_acceptance_criteria(run_id, project)
-    with tab_tc:
-        _section_test_cases(run_id, project)
-    with tab_rep:
-        _section_report_tab(run_id, project)
+        _section_reqs_v2(run_id, reqs, project)
+
+
+@st.dialog("Agregar requerimiento", width="large")
+def _add_req_to_project_dialog(run_id: str) -> None:
+    _k_title   = f"_ard_title_{run_id}"
+    _k_content = f"_ard_content_{run_id}"
+    _k_file    = f"_ard_file_{run_id}"
+    _k_loaded  = f"_ard_loaded_{run_id}"
+
+    st.text_input("Título *", key=_k_title,
+                  placeholder="Ej: Módulo de autenticación SSO")
+
+    uploaded = st.file_uploader(
+        "Adjuntar archivo (opcional)",
+        type=["txt", "pdf", "docx"],
+        key=_k_file,
+        help="El texto extraído se colocará automáticamente en el campo de requerimiento",
+    )
+    if uploaded:
+        fname = uploaded.name
+        if fname != st.session_state.get(_k_loaded):
+            extracted = _extract_req_text(uploaded)
+            st.session_state[_k_content] = extracted
+            st.session_state[_k_loaded]  = fname
+
+    st.text_area("Requerimiento *", key=_k_content,
+                 height=180, placeholder="Describe el requerimiento de forma libre…")
+
+    col_c, col_s = st.columns([1, 2])
+    with col_c:
+        if st.button("Cancelar", use_container_width=True, key=f"_ard_cancel_{run_id}"):
+            for k in [_k_title, _k_content, _k_file, _k_loaded]:
+                st.session_state.pop(k, None)
+            st.rerun()
+    with col_s:
+        if st.button("Agregar", type="primary", use_container_width=True, key=f"_ard_ok_{run_id}"):
+            title   = st.session_state.get(_k_title, "").strip()
+            content = st.session_state.get(_k_content, "").strip()
+            errs: list[str] = []
+            if not title:
+                errs.append("El título es obligatorio.")
+            if len(content) < 20:
+                errs.append("El requerimiento debe tener al menos 20 caracteres.")
+            if errs:
+                for e in errs:
+                    st.error(e)
+                return
+            attachment = st.session_state.pop(_k_loaded, None)
+            payload: dict = {"title": title, "content": content}
+            if attachment:
+                payload["attachment_name"] = attachment
+            result = api.post(f"{BACKEND}/projects/{run_id}/requirements", payload)
+            if result is not None:
+                for k in [_k_title, _k_content, _k_file]:
+                    st.session_state.pop(k, None)
+                st.rerun()
 
 
 @st.dialog("Editar proyecto", width="large")
@@ -1387,8 +1664,9 @@ _DET_LOGO_JS = """<script>
     });
   }
 
-  function setupEditBtn(){ wireHtmlBtn('qa-hero-edit-btn','qa-edit-trig-anchor','_qaEditOk'); }
-  function setupDelBtn(){  wireHtmlBtn('qa-hero-del-btn','qa-del-trig-anchor','_qaDelOk');   }
+  function setupEditBtn(){   wireHtmlBtn('qa-hero-edit-btn',   'qa-edit-trig-anchor',  '_qaEditOk');   }
+  function setupDelBtn(){    wireHtmlBtn('qa-hero-del-btn',    'qa-del-trig-anchor',   '_qaDelOk');    }
+  function setupAddReqBtn(){ wireHtmlBtn('qa-hero-addreq-btn','qa-addreq-trig-anchor','_qaAddReqOk'); }
 
   // ── Wire ✕ remove-member buttons → hidden Streamlit button ─────────────
   function wireRmBtns(){
@@ -1490,13 +1768,13 @@ _DET_LOGO_JS = """<script>
     var _t=null;
     W._qaDetLogoObs=new MutationObserver(function(){
       clearTimeout(_t);_t=setTimeout(function(){
-        hideLogoUL();setupEditBtn();setupDelBtn();setupTeamMS();wireRmBtns();
+        hideLogoUL();setupEditBtn();setupDelBtn();setupAddReqBtn();setupTeamMS();wireRmBtns();
       },180);
     });
     W._qaDetLogoObs.observe(D.body,{childList:true,subtree:true});
   }
 
-  setTimeout(function(){hideLogoUL();attach();setupEditBtn();setupDelBtn();setupTeamMS();wireRmBtns();},400);
+  setTimeout(function(){hideLogoUL();attach();setupEditBtn();setupDelBtn();setupAddReqBtn();setupTeamMS();wireRmBtns();},400);
 })();
 </script>"""
 
@@ -1667,8 +1945,8 @@ def _req_edit_form(run_id: str, req_id: str, current_title: str, current_content
 def _section_assign_analysts(run_id: str, project: dict) -> None:
     assigned = list(project.get("assigned_analysts") or [])
 
-    all_users = api.get(f"{BACKEND}/auth/users") or []
-    user_map  = {u["email"]: u for u in all_users}
+    all_users  = api.get(f"{BACKEND}/auth/users") or []
+    user_map   = {u["email"]: u for u in all_users}
     assignable = [u for u in all_users if u.get("is_active") and u.get("role") != "admin"]
     options    = [u["email"] for u in assignable]
 
@@ -1680,30 +1958,80 @@ def _section_assign_analysts(run_id: str, project: dict) -> None:
         tag  = f"{role} · {dev}" if dev else role
         return f"{name} — {tag}" if tag else name
 
-    # CSS: center Guardar button vertically within its column regardless of multiselect height
-    st.markdown(
-        '<style>'
-        '[data-testid="stVerticalBlock"]:has(#qa-guardar-spacer){'
-        'display:flex!important;flex-direction:column!important;justify-content:center!important;}'
-        '</style>',
-        unsafe_allow_html=True,
-    )
+    col_members, col_assign = st.columns([3, 2])
 
-    # ── Multiselect at the top (pre-marked assigned members) ─────────────────
-    col_ms, col_btn = st.columns([3, 1])
-    with col_ms:
+    # ── Columna izquierda: miembros actuales ──────────────────────────────────
+    with col_members:
+        st.markdown(
+            '<div style="color:#8b949e;font-size:.78rem;font-weight:600;'
+            'text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem;">'
+            'Miembros del equipo</div>',
+            unsafe_allow_html=True,
+        )
+        if not assigned:
+            st.markdown(
+                '<div style="color:#4b5563;font-size:.83rem;padding:.4rem 0;">'
+                'Sin miembros asignados aún.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            for email in assigned:
+                u        = user_map.get(email, {})
+                role     = u.get("role", "")
+                dev_type = u.get("developer_type", "")
+                name     = u.get("name") or email.split("@")[0]
+                if role == "developer" and dev_type:
+                    role_lbl = _DEV_TYPE_LBL.get(dev_type, dev_type)
+                else:
+                    role_lbl = _ROLE_LBL.get(role, role or "—")
+                chip_style, fg, _ = _ROLE_CHIP.get(
+                    role, ("background:#1a1f2e;border:1px solid #21262d;", "#c9d1d9", "")
+                )
+                safe_e  = re.sub(r'[^a-zA-Z0-9]', '_', email)
+                anch_id = f"rm_anch_{safe_e}"
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;justify-content:space-between;'
+                    f'background:#0d1117;border:1px solid #21262d;border-radius:8px;'
+                    f'padding:.5rem .75rem;margin-bottom:.3rem;">'
+                    f'<div>'
+                    f'<div style="color:#e2e8f0;font-size:.87rem;font-weight:600;">{name}</div>'
+                    f'<div style="color:#6b7280;font-size:.77rem;">{email}</div>'
+                    f'<div style="margin-top:.2rem;">'
+                    f'<span style="{chip_style}color:{fg};border-radius:9999px;'
+                    f'font-size:.68rem;padding:.1rem .45rem;">{role_lbl}</span>'
+                    f'</div></div>'
+                    f'<span data-rm-member="{email}" data-rm-anch="{anch_id}" title="Quitar del equipo"'
+                    f' style="display:inline-flex;align-items:center;justify-content:center;'
+                    f'cursor:pointer;color:#0891b2;font-size:.85rem;'
+                    f'padding:.25rem .45rem;border-radius:4px;line-height:1;">'
+                    f'✕</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f'<div id="{anch_id}"></div>', unsafe_allow_html=True)
+                if st.button("​", key=f"rm_btn_{safe_e}_{run_id}"):
+                    api.delete(f"{BACKEND}/projects/{run_id}/team/{email}")
+                    st.session_state.pop("_sp_user_map", None)
+                    st.rerun()
+
+    # ── Columna derecha: asignar miembros ─────────────────────────────────────
+    with col_assign:
+        st.markdown(
+            '<div style="color:#8b949e;font-size:.78rem;font-weight:600;'
+            'text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem;">'
+            'Asignar miembros</div>',
+            unsafe_allow_html=True,
+        )
         new_sel = st.multiselect(
-            "Equipo",
+            "Seleccionar",
             options=options,
             default=[e for e in assigned if e in options],
             format_func=_fmt,
             key=f"team_ms_{run_id}",
-            placeholder="Buscar y seleccionar miembros…",
+            placeholder="Buscar miembros…",
             label_visibility="collapsed",
         )
-    with col_btn:
-        st.markdown("<div id='qa-guardar-spacer'></div>", unsafe_allow_html=True)
-        if st.button("Guardar", key=f"team_save_{run_id}", use_container_width=True, type="primary"):
+        if st.button("Guardar equipo", key=f"team_save_{run_id}", use_container_width=True, type="primary"):
             to_add    = set(new_sel) - set(assigned)
             to_remove = set(assigned) - set(new_sel)
             for email in to_add:
@@ -1714,60 +2042,12 @@ def _section_assign_analysts(run_id: str, project: dict) -> None:
             st.session_state.pop("_sp_user_map", None)
             st.rerun()
 
-    # ── Team flat list ────────────────────────────────────────────────────────
-    if not assigned:
-        st.markdown(
-            '<div style="color:#4b5563;font-size:.83rem;margin-top:.75rem;padding:.5rem 0;">'
-            'Sin miembros asignados aún.</div>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    st.markdown("<div style='margin-top:.65rem;'></div>", unsafe_allow_html=True)
-    for email in assigned:
-        u        = user_map.get(email, {})
-        role     = u.get("role", "")
-        dev_type = u.get("developer_type", "")
-        name     = u.get("name") or email.split("@")[0]
-        if role == "developer" and dev_type:
-            role_lbl = _DEV_TYPE_LBL.get(dev_type, dev_type)
-        else:
-            role_lbl = _ROLE_LBL.get(role, role or "—")
-        chip_style, fg, _ = _ROLE_CHIP.get(
-            role, ("background:#1a1f2e;border:1px solid #21262d;", "#c9d1d9", "")
-        )
-        safe_e  = re.sub(r'[^a-zA-Z0-9]', '_', email)
-        anch_id = f"rm_anch_{safe_e}"
-        st.markdown(
-            f'<div style="display:flex;align-items:center;justify-content:space-between;'
-            f'background:#0d1117;border:1px solid #21262d;border-radius:8px;'
-            f'padding:.5rem .75rem;margin-bottom:.3rem;">'
-            f'<div>'
-            f'<div style="color:#e2e8f0;font-size:.87rem;font-weight:600;">{name}</div>'
-            f'<div style="color:#6b7280;font-size:.77rem;">{email}</div>'
-            f'<div style="margin-top:.2rem;">'
-            f'<span style="{chip_style}color:{fg};border-radius:9999px;'
-            f'font-size:.68rem;padding:.1rem .45rem;">{role_lbl}</span>'
-            f'</div></div>'
-            f'<span data-rm-member="{email}" data-rm-anch="{anch_id}" title="Quitar del equipo"'
-            f' style="display:inline-flex;align-items:center;justify-content:center;'
-            f'cursor:pointer;color:#0891b2;font-size:.85rem;'
-            f'padding:.25rem .45rem;border-radius:4px;line-height:1;">'
-            f'✕</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        # Anchor + hidden Streamlit button — wired by wireRmBtns() in _DET_LOGO_JS
-        st.markdown(f'<div id="{anch_id}"></div>', unsafe_allow_html=True)
-        if st.button("​", key=f"rm_btn_{safe_e}_{run_id}"):
-            api.delete(f"{BACKEND}/projects/{run_id}/team/{email}")
-            st.session_state.pop("_sp_user_map", None)
-            st.rerun()
-
 
 def _section_jira_export(run_id: str, project: dict) -> None:
     jira_export = project.get("jira_export")
     if jira_export:
+        proj_key    = jira_export.get("jira_project_key", "")
+        proj_url    = jira_export.get("jira_project_url", "#")
         epic_url    = (jira_export.get("epic") or {}).get("url", "#")
         epic_key    = (jira_export.get("epic") or {}).get("key", "")
         exported_at = jira_export.get("exported_at", "")[:16]
@@ -1778,17 +2058,17 @@ def _section_jira_export(run_id: str, project: dict) -> None:
             f'{icon("check-circle",16,"#4ade80")}'
             f'<div><div style="color:#4ade80;font-size:.88rem;font-weight:600;">'
             f'Exportado el {exported_at} · {total} tickets</div>'
-            f'<div style="color:#86efac;font-size:.8rem;">Epic: '
+            f'<div style="color:#86efac;font-size:.8rem;">'
+            f'Proyecto: <a href="{proj_url}" target="_blank" style="color:#86efac;">{proj_key}</a>'
+            f'&nbsp;·&nbsp;Epic: '
             f'<a href="{epic_url}" target="_blank" style="color:#86efac;">{epic_key}</a>'
             f'</div></div></div>',
             unsafe_allow_html=True,
         )
-        if st.button("Re-exportar a Jira", type="secondary"):
-            _do_jira_export(run_id)
     else:
         st.markdown(
             '<div style="color:#6b7280;font-size:.82rem;margin-bottom:.5rem;">'
-            'Genera la jerarquía Epic → Story → Sub-task automáticamente en Jira.</div>',
+            'Crea proyecto + Epic → Story → Sub-task automáticamente en Jira.</div>',
             unsafe_allow_html=True,
         )
         if st.button("Exportar a Jira →", type="primary", use_container_width=True):
@@ -1796,12 +2076,13 @@ def _section_jira_export(run_id: str, project: dict) -> None:
 
 
 def _do_jira_export(run_id: str) -> None:
-    with st.spinner("Creando tickets en Jira…"):
+    with st.spinner("Creando proyecto y tickets en Jira…"):
         result = api.post(f"{BACKEND}/projects/{run_id}/jira", {})
     if result:
         st.success(
-            f"Epic creado: **{result['epic_key']}** · "
-            f"{result['total_created']} tickets en total."
+            f"Proyecto **{result['jira_project_key']}** · "
+            f"Epic **{result['epic_key']}** · "
+            f"{result['total_created']} tickets."
         )
         st.rerun()
 
@@ -1929,7 +2210,8 @@ def _section_user_stories(run_id: str, project: dict) -> None:
             if dev_options:
                 dev_emails  = list(dev_options.keys())
                 default_idx = dev_emails.index(current_dev) if current_dev in dev_emails else 0
-                col_sel, col_btn = st.columns([5, 1])
+                _safe_sid2 = re.sub(r'[^a-zA-Z0-9]', '_', story_id)
+                col_sel, col_btn = st.columns([5, 2])
                 with col_sel:
                     selected_dev = st.selectbox(
                         "Asignar desarrollador",
@@ -1940,14 +2222,23 @@ def _section_user_stories(run_id: str, project: dict) -> None:
                     )
                 with col_btn:
                     st.markdown("<div style='height:1.65rem'></div>", unsafe_allow_html=True)
-                    if st.button("→", key=f"assign_hu_{run_id}_{story_id}",
-                                 help="Asignar desarrollador", use_container_width=True):
+                    if st.button("Asignar →", key=f"assign_hu_{run_id}_{story_id}",
+                                 use_container_width=True):
                         result = api.post(
                             f"{BACKEND}/projects/{run_id}/stories/{story_id}/assign",
                             {"developer_email": selected_dev},
                         )
                         if result is not None:
                             st.rerun()
+                if current_dev:
+                    if st.button(
+                        "✕ Desasignar", key=f"unassign_hu2_{run_id}_{_safe_sid2}",
+                        use_container_width=True,
+                    ):
+                        api.delete(
+                            f"{BACKEND}/projects/{run_id}/stories/{story_id}/assign"
+                        )
+                        st.rerun()
 
 
 # ── Tab: Criterios de aceptación ──────────────────────────────────────────────
@@ -2086,6 +2377,96 @@ def _section_test_cases(run_id: str, project: dict) -> None:  # noqa: ARG001
                 )
 
 
+# ── Tab: Comentarios ─────────────────────────────────────────────────────────
+
+_ACTION_LABEL = {
+    "accepted":     ("✓ Aceptado",     "#14532d", "#86efac"),
+    "modified":     ("✎ Modificado",   "#1c3a2a", "#6ee7b7"),
+    "rejected":     ("✗ Rechazado",    "#431407", "#f97316"),
+    "reclassified": ("⇄ Reclasificado","#1e3a5f", "#93c5fd"),
+}
+
+
+def _section_comments_tab(ref_data: dict) -> None:
+    """Shows global analyst feedback and per-scenario review notes."""
+    report_data = ref_data.get("report_data") or {}
+    hitl        = report_data.get("hitl") or {}
+    feedback    = hitl.get("analyst_feedback") or ""
+    changes     = hitl.get("changes") or []
+    ambiguities = hitl.get("ambiguities_resolved") or []
+
+    # ── Comentario global ─────────────────────────────────────────────────────
+    if feedback:
+        st.markdown(
+            f'<div style="background:#161b22;border:1px solid #21262d;'
+            f'border-left:3px solid #00bcd4;border-radius:0 8px 8px 0;'
+            f'padding:.65rem 1rem;margin-bottom:.75rem;">'
+            f'<div style="color:#6b7280;font-size:.72rem;font-weight:600;'
+            f'text-transform:uppercase;letter-spacing:.06em;margin-bottom:.3rem;">Feedback global</div>'
+            f'<div style="color:#c9d1d9;font-size:.85rem;line-height:1.6;">{feedback}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Comentarios por escenario ─────────────────────────────────────────────
+    noted = [c for c in changes if c.get("notes")]
+    if noted:
+        st.markdown(
+            f'<div style="color:#6b7280;font-size:.78rem;margin-bottom:.45rem;">'
+            f'{len(noted)} comentario(s) de revisión por escenario</div>',
+            unsafe_allow_html=True,
+        )
+        for ch in noted:
+            action   = ch.get("action", "")
+            label, bg, fc = _ACTION_LABEL.get(action, (action, "#21262d", "#8b949e"))
+            sc_name  = ch.get("scenario_name", "—")
+            notes    = ch.get("notes", "")
+            ts       = (ch.get("timestamp") or "")[:16]
+            st.markdown(
+                f'<div style="background:#0d1117;border:1px solid #21262d;'
+                f'border-radius:6px;padding:.55rem .85rem;margin-bottom:.35rem;">'
+                f'<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;'
+                f'margin-bottom:.3rem;">'
+                f'<span style="background:{bg};color:{fc};border-radius:4px;'
+                f'padding:.05rem .35rem;font-size:.72rem;font-weight:600;">{label}</span>'
+                f'<span style="color:#c9d1d9;font-size:.83rem;font-weight:600;">{sc_name}</span>'
+                f'{"<span style=color:#4b5563;font-size:.72rem;>" + ts + "</span>" if ts else ""}'
+                f'</div>'
+                f'<div style="color:#8b949e;font-size:.82rem;line-height:1.6;">{notes}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    elif not feedback:
+        st.markdown(
+            '<div style="color:#4b5563;font-size:.85rem;padding:.5rem 0;">'
+            'No hay comentarios de revisión para este análisis.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Ambigüedades resueltas ────────────────────────────────────────────────
+    if ambiguities:
+        st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+        with st.expander(f"Ambigüedades resueltas ({len(ambiguities)})"):
+            for amb in ambiguities:
+                orig       = amb.get("original_text", "")
+                resolution = amb.get("resolution", "")
+                assumption = amb.get("assumption_made", False)
+                st.markdown(
+                    f'<div style="background:#0d1117;border:1px solid #21262d;'
+                    f'border-left:2px solid #f59e0b;border-radius:0 6px 6px 0;'
+                    f'padding:.5rem .8rem;margin-bottom:.35rem;">'
+                    f'<div style="color:#fcd34d;font-size:.79rem;margin-bottom:.2rem;">{orig}</div>'
+                    f'<div style="color:#c9d1d9;font-size:.82rem;line-height:1.55;">{resolution}</div>'
+                    + (
+                        '<div style="color:#f97316;font-size:.72rem;margin-top:.2rem;">'
+                        '⚠ Asunción aplicada</div>'
+                        if assumption else ""
+                    )
+                    + f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+
 # ── Tab: Reporte ──────────────────────────────────────────────────────────────
 
 def _section_report_tab(run_id: str, project: dict) -> None:
@@ -2134,6 +2515,815 @@ def _section_report_tab(run_id: str, project: dict) -> None:
         st.session_state.view = "report"
         st.session_state.scrum_selected_project = None
         st.rerun()
+
+
+
+# ── Requerimientos v2: master-detail ──────────────────────────────────────────
+
+def _get_refinement_data(ref_run_id: str) -> dict:
+    """Fetch and cache full pipeline data for a refinement run."""
+    cache_key = f"_ref_cache_{ref_run_id}"
+    if cache_key not in st.session_state:
+        data = api.get(f"{BACKEND}/pipeline/projects/{ref_run_id}") or {}
+        st.session_state[cache_key] = data
+    return st.session_state[cache_key]
+
+
+_REQ_LIST_CSS = """<style>
+/* Hide native buttons — kept in DOM so JS can click them */
+[class*="st-key-req_sel_"] {
+  position:absolute!important;top:-9999px!important;
+  left:-9999px!important;width:1px!important;height:1px!important;
+  overflow:hidden!important;pointer-events:none!important;
+}
+</style>"""
+
+
+def _section_reqs_v2(run_id: str, reqs: list, project: dict) -> None:
+    """Master-detail requirements view inside the Requerimientos tab."""
+    if not reqs:
+        st.markdown(
+            '<div style="background:#1a1108;border:1px solid #713f12;border-radius:8px;'
+            'padding:.7rem 1rem;color:#fcd34d;font-size:.87rem;">'
+            f'{icon("warning",13,"#fcd34d")}&nbsp;'
+            'Este proyecto no tiene requerimientos. Usa el botón '
+            '<strong>＋ Agregar req</strong> en la cabecera del proyecto.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    sel_key   = f"_sel_req_{run_id}"
+    valid_ids = {r["req_id"] for r in reqs}
+    if st.session_state.get(sel_key) not in valid_ids:
+        st.session_state[sel_key] = reqs[0]["req_id"]
+
+    col_list, col_detail = st.columns([1, 2.5])
+
+    with col_list:
+        _render_req_list_v2(run_id, reqs, st.session_state[sel_key], sel_key)
+
+    with col_detail:
+        sel_req = next((r for r in reqs if r["req_id"] == st.session_state[sel_key]), reqs[0])
+        _render_req_panel_v2(run_id, sel_req, project)
+
+
+_REVIEW_ICON = {
+    "approved":       "✅",
+    "rejected":       "❌",
+    "needs_changes":  "⚠",
+    "pending_review": "⏳",
+}
+
+
+def _render_req_list_v2(run_id: str, reqs: list, selected_id: str, sel_key: str) -> None:
+    """Left-column requirement selector — compact scrollable HTML list."""
+    st.markdown(_REQ_LIST_CSS, unsafe_allow_html=True)
+
+    items_html = ""
+    for req in reqs:
+        req_id   = req["req_id"]
+        title    = (req.get("title") or req_id).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        is_sel   = req_id == selected_id
+        bg       = "#1a2744" if is_sel else "transparent"
+        bl       = "#3b82f6" if is_sel else "#21262d"
+        color    = "#93c5fd" if is_sel else "#c9d1d9"
+        fw       = "600" if is_sel else "400"
+        safe_key = f"req_sel_{run_id}_{req_id}"
+        items_html += (
+            f'<button onclick="clickSt(\'{safe_key}\')" '
+            f'style="display:block;width:100%;text-align:left;background:{bg};'
+            f'border:none;border-left:3px solid {bl};border-bottom:1px solid #21262d;'
+            f'color:{color};font-weight:{fw};padding:.42rem .65rem;font-size:.82rem;'
+            f'cursor:pointer;line-height:1.35;word-break:break-word;white-space:normal;">'
+            f'{title}</button>'
+        )
+
+    scroll_h = min(len(reqs) * 46 + 4, 400)
+    components.html(
+        f'<style>button:hover{{background:#131d2e!important;color:#93c5fd!important;}}</style>'
+        f'<div style="border:1px solid #21262d;border-radius:6px;'
+        f'overflow-y:auto;max-height:{scroll_h}px;">'
+        f'{items_html}</div>'
+        f'<script>function clickSt(k){{'
+        f'var b=window.parent.document.querySelector("[class*=\'st-key-"+k+"\'] button");'
+        f'if(b)b.click();}}</script>',
+        height=scroll_h + 10,
+        scrolling=False,
+    )
+
+    # Hidden Streamlit buttons wired by the JS above
+    for req in reqs:
+        req_id  = req["req_id"]
+        is_sel  = req_id == selected_id
+        if st.button(
+            req.get("title", req_id),
+            key=f"req_sel_{run_id}_{req_id}",
+            type="primary" if is_sel else "secondary",
+        ) and not is_sel:
+            st.session_state[sel_key] = req_id
+            st.rerun()
+
+
+@st.dialog("Editar requerimiento", width="large")
+def _edit_req_dialog(
+    run_id: str, req_id: str, current_title: str, current_content: str,
+    current_attachment: str = "",
+) -> None:
+    _k_loaded = "_erd_file_loaded"
+
+    new_title = st.text_input("Título *", value=current_title, key="_erd_title")
+
+    uploaded = st.file_uploader(
+        "Adjuntar archivo (opcional)",
+        type=["txt", "pdf", "docx"],
+        key="_erd_file",
+        help="El texto extraído reemplazará el contenido del campo de requerimiento",
+    )
+    if uploaded:
+        fname = uploaded.name
+        if fname != st.session_state.get(_k_loaded):
+            extracted = _extract_req_text(uploaded)
+            st.session_state["_erd_content"] = extracted
+            st.session_state[_k_loaded] = fname
+
+    if current_attachment and not st.session_state.get(_k_loaded):
+        st.markdown(
+            f'<div style="color:#6b7280;font-size:.77rem;margin-bottom:.2rem;">'
+            f'📎 Archivo cargado: <span style="color:#7dd3fc;">{current_attachment}</span></div>',
+            unsafe_allow_html=True,
+        )
+
+    new_content = st.text_area(
+        "Requerimiento *", value=current_content, height=200, key="_erd_content",
+    )
+
+    c_cancel, c_ok = st.columns([1, 2])
+    with c_cancel:
+        if st.button("Cancelar", use_container_width=True, key="_erd_cancel"):
+            st.rerun()
+    with c_ok:
+        if st.button("Guardar cambios", type="primary", use_container_width=True, key="_erd_ok"):
+            t = new_title.strip()
+            c = new_content.strip()
+            if not t:
+                st.error("El título es obligatorio.")
+                return
+            if len(c) < 20:
+                st.error("El requerimiento debe tener al menos 20 caracteres.")
+                return
+            payload: dict = {"title": t, "content": c}
+            loaded = st.session_state.pop(_k_loaded, None) or current_attachment or None
+            if loaded:
+                payload["attachment_name"] = loaded
+            result = api.patch(
+                f"{BACKEND}/projects/{run_id}/requirements/{req_id}",
+                payload,
+            )
+            if result is not None:
+                st.rerun()
+
+
+@st.dialog("Clonar requerimiento", width="large")
+def _clone_req_dialog(run_id: str, src_title: str, src_content: str) -> None:
+    st.markdown(
+        '<div style="color:#6b7280;font-size:.83rem;margin-bottom:.75rem;">'
+        'Crea una copia de este requerimiento con un nuevo nombre y/o contenido.</div>',
+        unsafe_allow_html=True,
+    )
+    new_title = st.text_input(
+        "Título *", value=f"{src_title} (copia)", key="_clone_title",
+    )
+    new_content = st.text_area(
+        "Requerimiento *", value=src_content, height=200, key="_clone_content",
+    )
+    c_ok, c_cancel = st.columns([1, 1])
+    with c_cancel:
+        if st.button("Cancelar", use_container_width=True, key="_clone_cancel"):
+            st.rerun()
+    with c_ok:
+        if st.button("Clonar", type="primary", use_container_width=True, key="_clone_ok"):
+            t = new_title.strip()
+            c = new_content.strip()
+            if not t:
+                st.error("El título es obligatorio.")
+                return
+            if len(c) < 20:
+                st.error("El requerimiento debe tener al menos 20 caracteres.")
+                return
+            result = api.post(
+                f"{BACKEND}/projects/{run_id}/requirements",
+                {"title": t, "content": c},
+            )
+            if result is not None:
+                st.success("Requerimiento clonado correctamente.")
+                st.rerun()
+
+
+def _render_req_panel_v2(run_id: str, req: dict, project: dict) -> None:
+    """Right-column detail panel for the selected requirement."""
+    req_id          = req["req_id"]
+    title           = req.get("title", req_id)
+    status          = req.get("status", "created")
+    content         = req.get("content", "")
+    refinements     = req.get("refinements") or []
+    attachment_name = req.get("attachment_name") or ""
+
+    # Review status from latest refinement
+    latest_rv      = (refinements[-1].get("review_status") or "") if refinements else ""
+    latest_by      = (refinements[-1].get("created_by") or "") if refinements else ""
+    latest_date    = (refinements[-1].get("created_at") or "")[:16] if refinements else ""
+    review_badge   = _REVIEW_BADGE.get(latest_rv, "")
+    attach_html    = (
+        f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:6px;'
+        f'padding:.1rem .45rem;font-size:.72rem;color:#7dd3fc;margin-left:.35rem;">'
+        f'📎 {attachment_name}</span>'
+    ) if attachment_name else ""
+    _date_part  = f'{latest_date}&nbsp;·&nbsp;' if latest_date else ""
+    _by_part    = f'por {latest_by}' if latest_by else ""
+    approver_html = (
+        f'<span style="font-size:.73rem;color:#6b7280;margin-left:.25rem;">'
+        f'{_date_part}{_by_part}</span>'
+    ) if review_badge and (_date_part or _by_part) else ""
+
+    _no_analysis_badge = (
+        '<span style="background:#450a0a;color:#fca5a5;padding:.1rem .5rem;'
+        'border-radius:10px;font-size:.72rem;">Sin análisis</span>'
+        if not refinements else ""
+    )
+
+    st.markdown(
+        f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:.4rem;'
+        f'margin-bottom:.55rem;">'
+        f'<span style="font-size:1.05rem;font-weight:700;color:#e2e8f0;">{title}</span>'
+        f'{_no_analysis_badge}{review_badge}{approver_html}{attach_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Scrollable content (same style for all reqs) ──────────────────────────
+    _safe_content = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+    st.markdown(
+        f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+        f'padding:.6rem .9rem;max-height:110px;overflow-y:auto;color:#8b949e;'
+        f'font-size:.8rem;line-height:1.6;margin-bottom:.55rem;">'
+        f'{_safe_content}</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not refinements:
+        # ── Unanalyzed: edit button (+ attachment chip) + CTA ─────────────────
+        st.markdown("<div style='height:.3rem'></div>", unsafe_allow_html=True)
+        _col_edit, _col_attach = st.columns([1, 2])
+        with _col_edit:
+            if st.button(
+                "Editar requerimiento", key=f"edit_req_btn_{req_id}",
+                help="Modificar título y contenido de este requerimiento",
+                use_container_width=True,
+            ):
+                _edit_req_dialog(run_id, req_id, title, content, attachment_name)
+        with _col_attach:
+            if attachment_name:
+                st.markdown(
+                    f'<div style="padding-top:.4rem;">'
+                    f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:6px;'
+                    f'padding:.18rem .5rem;font-size:.75rem;color:#7dd3fc;">📎 {attachment_name}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown(
+            '<div style="background:#1a1108;border:1px solid #713f12;border-radius:10px;'
+            'padding:1.1rem 1.25rem;margin-top:.75rem;">'
+            f'<div style="color:#fcd34d;font-weight:600;font-size:.9rem;margin-bottom:.35rem;">'
+            f'{icon("warning",13,"#fcd34d")}&nbsp; Sin análisis</div>'
+            '<div style="color:#d97706;font-size:.82rem;line-height:1.55;">'
+            'Este requerimiento aún no ha sido analizado. Inicia el flujo HITL para '
+            'generar historias de usuario, test cases y el reporte ejecutivo.'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+        if st.button(
+            "Iniciar análisis →", type="primary",
+            key=f"start_analysis_{req_id}", use_container_width=True,
+        ):
+            st.session_state["_prev_view"]          = "scrum_projects"
+            st.session_state["_auto_analyze"]       = content
+            st.session_state["_auto_analyze_proj"]  = run_id
+            st.session_state["_auto_analyze_req"]   = req_id
+            st.session_state.view                   = "chat"
+            st.rerun()
+        return
+
+    # ── Refinement selector ───────────────────────────────────────────────────
+    ref_sel_key = f"_sel_ref_{run_id}_{req_id}"
+
+    if len(refinements) > 1:
+        ref_opts = {
+            r["run_id"]: (
+                r.get("created_at", "")[:16]
+                + f"  ·  {r.get('summary', {}).get('total_stories', 0)} HU"
+                + f"  ·  {r.get('summary', {}).get('total_scenarios', 0)} TC"
+                + (f"  {_REVIEW_ICON.get(r.get('review_status',''), '')}"
+                   if r.get("review_status") else "")
+            )
+            for r in refinements
+        }
+        sel_ref_id = st.selectbox(
+            "Refinamiento",
+            options=list(ref_opts.keys()),
+            format_func=lambda k: ref_opts[k],
+            key=ref_sel_key,
+            label_visibility="collapsed",
+        )
+    else:
+        sel_ref_id = refinements[0]["run_id"]
+        st.session_state[ref_sel_key] = sel_ref_id
+
+    # ── Clonar + Generar código (+ attachment chip) ───────────────────────────
+    st.markdown("<div style='height:.3rem'></div>", unsafe_allow_html=True)
+    _col_clone, _col_code, _col_attach2 = st.columns([1, 1, 1])
+    with _col_clone:
+        if st.button(
+            "Clonar requerimiento", key=f"clone_req_{req_id}",
+            help="Crear una copia de este requerimiento con nuevo título y contenido",
+            use_container_width=True,
+        ):
+            _clone_req_dialog(run_id, title, content)
+    with _col_code:
+        _cg_key   = f"_cg_active_{req_id}"
+        store_key = f"cg_{sel_ref_id}"
+        if st.button(
+            "Generar código", key=f"gen_code_{req_id}",
+            help="Genera módulos Python y tests Pytest para este requerimiento",
+            use_container_width=True,
+        ):
+            _start_cg_thread(store_key, sel_ref_id, run_id)
+            st.session_state[_cg_key] = store_key
+            _code_gen_progress_dialog(store_key, _cg_key)
+        elif st.session_state.get(_cg_key) in _CODE_GEN_STORE:
+            _code_gen_progress_dialog(st.session_state[_cg_key], _cg_key)
+    with _col_attach2:
+        if attachment_name:
+            st.markdown(
+                f'<div style="padding-top:.4rem;">'
+                f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:6px;'
+                f'padding:.18rem .5rem;font-size:.75rem;color:#7dd3fc;">📎 {attachment_name}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    ref_data = _get_refinement_data(sel_ref_id)
+    if not ref_data:
+        st.warning("No se pudieron cargar los datos del refinamiento.")
+        return
+
+    # ── Sub-tabs ──────────────────────────────────────────────────────────────
+    tab_stories, tab_code, tab_comments, tab_rep = st.tabs(
+        ["Historias y Tests", "Código Generado", "Comentarios", "Reporte"]
+    )
+    with tab_stories:
+        _section_stories_unified(run_id, ref_data, project)
+    with tab_code:
+        _tab_codigo_generado(sel_ref_id, ref_data)
+    with tab_comments:
+        _section_comments_tab(ref_data)
+    with tab_rep:
+        _section_report_tab(sel_ref_id, ref_data)
+
+
+# ── Código Generado tab ───────────────────────────────────────────────────────
+
+_CODE_REVIEW_BADGE = {
+    "accepted":      '<span style="background:#14532d;color:#86efac;padding:.1rem .5rem;border-radius:8px;font-size:.72rem;">✓ Aceptado</span>',
+    "needs_changes": '<span style="background:#3b2007;color:#fcd34d;padding:.1rem .5rem;border-radius:8px;font-size:.72rem;">⚠ Requiere cambios</span>',
+    "rejected":      '<span style="background:#450a0a;color:#fca5a5;padding:.1rem .5rem;border-radius:8px;font-size:.72rem;">✗ Rechazado</span>',
+}
+
+
+def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
+    """Tab HITL para revisar código generado: módulos Python + tests Pytest."""
+    # Priority: freshly generated (in session) → persisted in MongoDB
+    code_result = st.session_state.get(f"_code_result_{ref_run_id}")
+    if code_result is None:
+        code_result = {}
+        saved_code  = ref_data.get("generated_code")
+        saved_tests = ref_data.get("generated_tests")
+        if saved_code is not None:
+            code_result["generated_code"]  = saved_code
+            code_result["generated_tests"] = saved_tests or []
+
+    modules = code_result.get("generated_code") or []
+    tests   = code_result.get("generated_tests") or []
+
+    if not modules:
+        st.markdown(
+            '<div style="text-align:center;padding:2.5rem 1rem;">'
+            '<div style="font-size:2rem;margin-bottom:.75rem;">🤖</div>'
+            '<div style="color:#e2e8f0;font-weight:600;font-size:1rem;margin-bottom:.4rem;">'
+            'Sin código generado</div>'
+            '<div style="color:#6b7280;font-size:.85rem;">'
+            'Haz clic en <b style="color:#a78bfa;">Generar código</b> para que el agente '
+            'produzca módulos Python y tests Pytest desde las historias analizadas.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Existing review decisions saved in MongoDB
+    existing_decisions: dict[str, dict] = {}
+    for d in (ref_data.get("code_decisions") or []):
+        existing_decisions[d.get("filename", "")] = d
+
+    existing_global = ref_data.get("code_review_status")
+
+    # Header summary
+    total_m = len(modules)
+    total_t = len(tests)
+    st.markdown(
+        f'<div style="display:flex;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap;">'
+        f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:8px;'
+        f'padding:.25rem .7rem;font-size:.82rem;color:#93c5fd;">📦 {total_m} módulos</span>'
+        f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:8px;'
+        f'padding:.25rem .7rem;font-size:.82rem;color:#86efac;">🧪 {total_t} tests</span>'
+        + (f'<span style="margin-left:auto;">{_CODE_REVIEW_BADGE.get(existing_global,"")}</span>'
+           if existing_global else "")
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Per-module HITL review
+    decisions_state_key = f"_code_decisions_{ref_run_id}"
+    if decisions_state_key not in st.session_state:
+        # Seed from existing decisions if any
+        st.session_state[decisions_state_key] = {
+            m["filename"]: {
+                "action": existing_decisions.get(m["filename"], {}).get("action", "accepted"),
+                "notes":  existing_decisions.get(m["filename"], {}).get("notes", ""),
+            }
+            for m in modules
+        }
+
+    decisions_map: dict = st.session_state[decisions_state_key]
+
+    # Build test lookup by target_module
+    tests_by_module: dict[str, list] = {}
+    for t in tests:
+        tgt = t.get("target_module", "")
+        tests_by_module.setdefault(tgt, []).append(t)
+
+    for mod in modules:
+        fname       = mod.get("filename", "module.py")
+        description = mod.get("description", "")
+        source_code = mod.get("source_code", "")
+        mod_tests   = tests_by_module.get(fname, [])
+        cur         = decisions_map.get(fname, {"action": "accepted", "notes": ""})
+
+        with st.expander(f"📄 `{fname}`", expanded=False):
+            if description:
+                st.markdown(
+                    f'<div style="color:#9ca3af;font-size:.83rem;margin-bottom:.6rem;">{description}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Source code
+            st.markdown("**Código fuente**")
+            st.code(source_code, language="python")
+
+            # Tests for this module
+            if mod_tests:
+                st.markdown("**Tests Pytest**")
+                for t in mod_tests:
+                    tname = t.get("test_name", "test_file.py")
+                    st.markdown(f"<small style='color:#6b7280;'>`{tname}`</small>", unsafe_allow_html=True)
+                    st.code(t.get("source_code", ""), language="python")
+
+            # HITL decision
+            st.markdown("---")
+            st.markdown("**Decisión de revisión**")
+            action_key = f"_cda_{ref_run_id}_{fname}"
+            action = st.radio(
+                "Acción",
+                options=["accepted", "needs_changes"],
+                format_func=lambda v: "✓ Aceptar" if v == "accepted" else "⚠ Solicitar cambios",
+                index=0 if cur.get("action", "accepted") == "accepted" else 1,
+                key=action_key,
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+            decisions_map[fname]["action"] = action
+
+            notes = ""
+            if action == "needs_changes":
+                notes_key = f"_cdn_{ref_run_id}_{fname}"
+                notes = st.text_area(
+                    "Observaciones",
+                    value=cur.get("notes", ""),
+                    key=notes_key,
+                    placeholder="Describe los cambios requeridos…",
+                    height=80,
+                )
+            decisions_map[fname]["notes"] = notes
+
+    # Global decision + save
+    st.markdown("---")
+    global_key = f"_cdg_{ref_run_id}"
+    col_g, col_s = st.columns([2, 1])
+    with col_g:
+        global_decision = st.radio(
+            "Decisión global",
+            options=["accepted", "needs_changes", "rejected"],
+            format_func=lambda v: {"accepted": "✓ Aprobar todo", "needs_changes": "⚠ Requiere cambios", "rejected": "✗ Rechazar"}.get(v, v),
+            index=0,
+            key=global_key,
+            horizontal=True,
+        )
+    with col_s:
+        st.markdown("<div style='height:.3rem'></div>", unsafe_allow_html=True)
+        if st.button("💾 Guardar decisiones", key=f"_cds_{ref_run_id}", use_container_width=True, type="primary"):
+            payload = {
+                "run_id": ref_run_id,
+                "global_decision": global_decision,
+                "decisions": [
+                    {"filename": fname, "action": v["action"], "notes": v.get("notes") or ""}
+                    for fname, v in decisions_map.items()
+                ],
+                "reviewer": st.session_state.get("user_email", ""),
+            }
+            resp = api.post(f"{BACKEND}/pipeline/accept-code", payload)
+            if resp and resp.get("ok"):
+                _show_toast("Decisiones guardadas correctamente.")
+                # Clear caches so next render re-fetches from MongoDB
+                st.session_state.pop(f"_code_result_{ref_run_id}", None)
+                st.session_state.pop(decisions_state_key, None)
+                st.session_state.pop(f"_ref_cache_{ref_run_id}", None)
+                st.rerun()
+            else:
+                _show_toast(f"Error al guardar: {resp}", "error")
+
+
+# ── Unified HU + AC + TC view ─────────────────────────────────────────────────
+
+_KW_COLOR = {
+    "Given": "#60a5fa", "When": "#a78bfa", "Then": "#34d399",
+    "And": "#8b949e", "But": "#f87171",
+}
+_PRIO_COLOR = {"High": "#f97316", "Medium": "#facc15", "Low": "#6b7280"}
+
+
+def _section_stories_unified(run_id: str, ref_data: dict, project: dict) -> None:
+    """Unified view: each User Story shows its ACs and Gherkin Test Cases as collapsible sections."""
+    report_data = ref_data.get("report_data") or {}
+    stories     = report_data.get("user_stories") or []
+    features    = report_data.get("features") or []
+
+    if not stories:
+        _empty_tab(
+            "No hay historias de usuario generadas aún.",
+            "Analiza un requerimiento para que los agentes generen los artefactos.",
+        )
+        return
+
+    # Build story_id → [scenario] map
+    story_scenarios: dict[str, list] = {}
+    for feat in features:
+        fid = feat.get("user_story_id", "")
+        for sc in (feat.get("scenarios") or []):
+            story_scenarios.setdefault(fid, []).append(sc)
+
+    # Fetch story assignments
+    assignments_data = api.get(f"{BACKEND}/projects/{run_id}/assignments") or []
+    assigned_map: dict[str, str] = {a["story_id"]: a["developer_email"] for a in assignments_data}
+
+    # Build developer options from project's assigned_analysts filtered by role=developer
+    if "_sp_user_map" not in st.session_state:
+        users = api.get(f"{BACKEND}/auth/users") or []
+        st.session_state["_sp_user_map"] = {u["email"]: u for u in users}
+    user_map: dict = st.session_state["_sp_user_map"]
+
+    assigned_analysts = project.get("assigned_analysts") or []
+    dev_options: dict[str, str] = {}
+    for email in assigned_analysts:
+        u = user_map.get(email, {})
+        if u.get("role") == "developer":
+            name     = u.get("name") or email.split("@")[0]
+            dev_type = u.get("developer_type", "")
+            dev_options[email] = name + (
+                f" · {_DEV_TYPE_LBL.get(dev_type, dev_type)}" if dev_type else ""
+            )
+
+    total_sc = sum(len(v) for v in story_scenarios.values())
+    st.markdown(
+        f'<div style="color:#6b7280;font-size:.8rem;margin-bottom:.5rem;">'
+        f'{len(stories)} historia(s) · {total_sc} escenario(s)</div>',
+        unsafe_allow_html=True,
+    )
+
+    for story in stories:
+        story_id    = story.get("id", "")
+        title       = story.get("title", story_id)
+        priority    = story.get("priority", "")
+        story_type  = story.get("story_type", "")
+        as_a        = story.get("as_a", "")
+        i_want      = story.get("i_want", "")
+        so_that     = story.get("so_that", "")
+        biz_rules   = story.get("business_rules") or []
+        acs         = story.get("acceptance_criteria") or []
+        scenarios   = story_scenarios.get(story_id, [])
+        prio_color  = _PRIO_COLOR.get(priority, "#6b7280")
+        current_dev = assigned_map.get(story_id)
+
+        with st.expander(f"{story_id} — {title}"):
+            # ── Story statement ───────────────────────────────────────────────
+            st.markdown(
+                f'<div style="color:#8b949e;font-style:italic;font-size:.88rem;'
+                f'background:#161b22;border-left:3px solid #00bcd4;'
+                f'padding:.45rem .75rem;border-radius:0 6px 6px 0;margin-bottom:.5rem;">'
+                f'Como <strong style="color:#c9d1d9">{as_a}</strong>, '
+                f'quiero <strong style="color:#c9d1d9">{i_want}</strong>, '
+                f'para <strong style="color:#c9d1d9">{so_that}</strong>.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<div style="color:#6b7280;font-size:.75rem;margin-bottom:.4rem;">Prioridad: '
+                f'<span style="color:{prio_color};font-weight:600;">{priority}</span>'
+                f'&nbsp;&nbsp;Tipo: <span style="color:#c9d1d9;">{story_type}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+            # ── Business rules ────────────────────────────────────────────────
+            if biz_rules:
+                with st.expander(f"Reglas de negocio ({len(biz_rules)})"):
+                    for br in biz_rules:
+                        st.markdown(
+                            f'<div style="color:#c9d1d9;font-size:.82rem;'
+                            f'padding:.15rem 0 .15rem .65rem;'
+                            f'border-left:2px solid #21262d;">{br}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+            # ── Acceptance Criteria (collapsible) ─────────────────────────────
+            if acs:
+                with st.expander(f"Criterios de aceptación ({len(acs)})"):
+                    for ac in acs:
+                        ac_id  = ac.get("id", "")
+                        desc   = ac.get("description", "")
+                        given  = ac.get("given", "")
+                        when   = ac.get("when", "")
+                        then   = ac.get("then", "")
+                        is_neg = ac.get("is_negative_case", False)
+                        neg_tag = (
+                            '<span style="background:#431407;color:#f97316;border-radius:4px;'
+                            'padding:.05rem .3rem;font-size:.68rem;margin-left:.35rem;">NEG</span>'
+                            if is_neg else ""
+                        )
+                        st.markdown(
+                            f'<div style="background:#0d1117;border:1px solid #21262d;'
+                            f'border-left:2px solid #60a5fa;'
+                            f'border-radius:0 6px 6px 0;padding:.5rem .8rem;margin-bottom:.35rem;">'
+                            f'<div style="color:#c9d1d9;font-size:.84rem;font-weight:600;'
+                            f'margin-bottom:.3rem;">{ac_id}{neg_tag} — {desc}</div>'
+                            f'<div style="font-size:.79rem;line-height:1.85;color:#8b949e;">'
+                            f'<span style="color:#60a5fa;font-weight:600;'
+                            f'display:inline-block;width:3.5rem;">Given</span>{given}<br>'
+                            f'<span style="color:#a78bfa;font-weight:600;'
+                            f'display:inline-block;width:3.5rem;">When</span>{when}<br>'
+                            f'<span style="color:#34d399;font-weight:600;'
+                            f'display:inline-block;width:3.5rem;">Then</span>{then}'
+                            f'</div></div>',
+                            unsafe_allow_html=True,
+                        )
+
+            # ── Test Cases (collapsible) ──────────────────────────────────────
+            if scenarios:
+                with st.expander(f"Test Cases ({len(scenarios)})"):
+                    for sc in scenarios:
+                        sc_name = sc.get("name", "")
+                        sc_type = sc.get("scenario_type", "")
+                        quality = sc.get("quality_characteristic", "")
+                        tags    = sc.get("tags") or []
+                        steps   = sc.get("steps") or []
+
+                        tags_html = " ".join(
+                            f'<span style="background:#1e3a4a;color:#7dd3fc;border-radius:4px;'
+                            f'padding:.04rem .32rem;font-size:.68rem;">@{t}</span>'
+                            for t in tags
+                        )
+                        meta_parts = []
+                        if sc_type:
+                            meta_parts.append(f'<span style="color:#4b5563;font-size:.72rem;">{sc_type}</span>')
+                        if tags_html:
+                            meta_parts.append(tags_html)
+                        if quality:
+                            meta_parts.append(f'<span style="color:#4b5563;font-size:.72rem;">ISO 25010: {quality}</span>')
+                        meta_row = "&nbsp;".join(meta_parts)
+
+                        steps_parts = [
+                            f'<span style="color:{_KW_COLOR.get(s.get("keyword",""),"#8b949e")};'
+                            f'font-weight:600;display:inline-block;width:3.5rem;">'
+                            f'{s.get("keyword","")}</span>{s.get("text","")}'
+                            for s in steps
+                        ]
+                        steps_html = "<br>".join(steps_parts)
+
+                        st.markdown(
+                            f'<div style="background:#0d1117;border:1px solid #21262d;'
+                            f'border-left:2px solid #a78bfa;'
+                            f'border-radius:0 6px 6px 0;padding:.5rem .8rem;margin-bottom:.35rem;">'
+                            f'<div style="color:#c9d1d9;font-size:.84rem;font-weight:600;'
+                            f'margin-bottom:.3rem;">{sc_name}</div>'
+                            f'<div style="font-size:.79rem;line-height:1.85;color:#8b949e;">'
+                            f'{steps_html}</div>'
+                            + (f'<div style="margin-top:.3rem;">{meta_row}</div>' if meta_row else "")
+                            + f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+            # ── Developer assignment (project team developers only) ────────────
+            st.markdown(
+                '<div style="border-top:1px solid #1e2533;margin:.6rem 0 .5rem;"></div>',
+                unsafe_allow_html=True,
+            )
+            if dev_options:
+                dev_emails  = list(dev_options.keys())
+                default_idx = dev_emails.index(current_dev) if current_dev in dev_emails else 0
+                col_current, col_select = st.columns([2, 3])
+
+                with col_current:
+                    st.markdown(
+                        '<div style="color:#8b949e;font-size:.72rem;font-weight:600;'
+                        'text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem;">'
+                        'Asignado a</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if current_dev:
+                        dev_u    = user_map.get(current_dev, {})
+                        dev_name = dev_u.get("name") or current_dev.split("@")[0]
+                        dev_type = dev_u.get("developer_type", "")
+                        dev_tag  = _DEV_TYPE_LBL.get(dev_type, "") if dev_type else ""
+                        safe_sid = re.sub(r'[^a-zA-Z0-9]', '_', story_id)
+                        st.markdown(
+                            f'<div style="background:#0d1117;border:1px solid #21262d;'
+                            f'border-left:3px solid #6ee7b7;border-radius:0 6px 6px 0;'
+                            f'padding:.35rem .6rem;margin-bottom:.3rem;">'
+                            f'<div style="color:#6ee7b7;font-size:.82rem;font-weight:600;">'
+                            f'{dev_name}</div>'
+                            + (f'<div style="color:#4b5563;font-size:.72rem;">{dev_tag}</div>'
+                               if dev_tag else "")
+                            + f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        if st.button(
+                            "✕ Desasignar",
+                            key=f"unassign_hu_{run_id}_{safe_sid}",
+                            use_container_width=True,
+                        ):
+                            api.delete(
+                                f"{BACKEND}/projects/{run_id}/stories/{story_id}/assign"
+                            )
+                            st.rerun()
+                    else:
+                        st.markdown(
+                            '<div style="background:#0d1117;border:1px solid #21262d;'
+                            'border-radius:6px;padding:.35rem .6rem;'
+                            'color:#4b5563;font-size:.8rem;">Sin asignar</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                with col_select:
+                    st.markdown(
+                        '<div style="color:#8b949e;font-size:.72rem;font-weight:600;'
+                        'text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem;">'
+                        'Asignar</div>',
+                        unsafe_allow_html=True,
+                    )
+                    selected_dev = st.selectbox(
+                        "Asignar a",
+                        dev_emails,
+                        index=default_idx,
+                        format_func=lambda e: dev_options.get(e, e),
+                        key=f"dev_hu_{run_id}_{story_id}",
+                        label_visibility="collapsed",
+                    )
+                    if st.button(
+                        "Asignar desarrollador",
+                        key=f"assign_hu_{run_id}_{story_id}",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        result = api.post(
+                            f"{BACKEND}/projects/{run_id}/stories/{story_id}/assign",
+                            {"developer_email": selected_dev},
+                        )
+                        if result is not None:
+                            st.rerun()
+            else:
+                st.markdown(
+                    '<div style="color:#374151;font-size:.78rem;">'
+                    'Sin desarrolladores en el equipo — añade miembros con rol Developer '
+                    'en la pestaña Equipo para poder asignar historias.</div>',
+                    unsafe_allow_html=True,
+                )
 
     st.markdown("<div style='height:.75rem'></div>", unsafe_allow_html=True)
     _section_divider("Exportar a Jira", "arrow-up-tray")

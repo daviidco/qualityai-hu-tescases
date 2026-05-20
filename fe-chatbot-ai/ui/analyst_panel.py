@@ -1,6 +1,8 @@
 """Panel del Analista: proyectos asignados e inicio de pipeline por requerimiento."""
 from __future__ import annotations
 
+import base64
+
 import streamlit as st
 
 import api
@@ -57,8 +59,27 @@ def _render_project_list() -> None:
 
 def _project_card(p: dict) -> None:
     status = p.get("status", "created")
-    badge = _STATUS_BADGE.get(status, "")
+    req_count    = p.get("req_count", 0)
+    req_analyzed = p.get("req_analyzed", 0)
     has_req = bool(p.get("req_preview", "").strip())
+
+    # Badge basado en progreso de análisis de requerimientos
+    if req_count == 0:
+        req_badge = _STATUS_BADGE.get(status, "")
+    elif status == "analyzing":
+        req_badge = _STATUS_BADGE.get("analyzing", "")
+    elif req_analyzed >= req_count:
+        req_badge = (
+            f'<span style="background:#14532d;color:#86efac;{_B}">'
+            f'{icon("check-circle",12,"#86efac")} {req_analyzed} de {req_count} analizados</span>'
+        )
+    else:
+        _bg = "#1e3a5f" if req_analyzed == 0 else "#3b2007"
+        _fg = "#93c5fd" if req_analyzed == 0 else "#fcd34d"
+        req_badge = (
+            f'<span style="background:{_bg};color:{_fg};{_B}">'
+            f'{req_analyzed} de {req_count} analizados</span>'
+        )
 
     with st.container(border=True):
         col_info, col_btn = st.columns([5, 1])
@@ -66,7 +87,7 @@ def _project_card(p: dict) -> None:
             client = p.get("client_name", "")
             client_str = f" · {client}" if client else ""
             st.markdown(
-                f"**{p.get('project_name', 'Sin nombre')}**{client_str} &nbsp; {badge}",
+                f"**{p.get('project_name', 'Sin nombre')}**{client_str} &nbsp; {req_badge}",
                 unsafe_allow_html=True,
             )
             if not has_req:
@@ -131,10 +152,331 @@ def _render_project_detail(run_id: str) -> None:
             )
         st.markdown("")
 
-    st.divider()
+    # ── Cargar HU y test cases desde endpoints dedicados ─────────────────────
+    report_data = project.get("report_data") or {}
 
-    # ── Requerimientos ────────────────────────────────────────────────────────
-    _section_requirements(run_id, project)
+    hu_resp = api.get(f"{BACKEND}/projects/{run_id}/user-stories") or {}
+    user_stories = hu_resp.get("user_stories") or report_data.get("user_stories") or []
+
+    tc_resp = api.get(f"{BACKEND}/projects/{run_id}/test-cases") or {}
+    test_cases = tc_resp.get("test_cases") or report_data.get("features") or []
+
+    n_hu = len(user_stories)
+    n_tc = sum(len(f.get("scenarios") or []) for f in test_cases)
+    hu_lbl = f"Historias de Usuario ({n_hu})" if n_hu else "Historias de Usuario"
+    tc_lbl = f"Test Cases ({n_tc})" if n_tc else "Test Cases"
+
+    tab_reqs, tab_hu, tab_tc, tab_rep = st.tabs([
+        "Requerimientos", hu_lbl, tc_lbl, "Reporte",
+    ])
+
+    with tab_reqs:
+        _section_requirements(run_id, project)
+
+    with tab_hu:
+        _tab_user_stories(user_stories)
+
+    with tab_tc:
+        _tab_test_cases(test_cases)
+
+    with tab_rep:
+        _tab_report(run_id, project, report_data)
+
+
+def _tab_user_stories(stories: list) -> None:
+    """Tab: historias de usuario generadas por el agente."""
+
+    if not stories:
+        st.info(
+            "Aún no se han generado historias de usuario. "
+            "Inicia el análisis de un requerimiento para ver el contenido aquí."
+        )
+        return
+
+    st.markdown(
+        f'<div style="color:#6b7280;font-size:.85rem;margin-bottom:.65rem;">'
+        f'{len(stories)} historia(s) de usuario generadas por el agente</div>',
+        unsafe_allow_html=True,
+    )
+
+    _PRIO_COLOR = {
+        "critical": "#dc2626", "high": "#d97706",
+        "medium": "#2563eb",   "low": "#6b7280",
+    }
+    _PRIO_ES = {
+        "critical": "CRÍTICA", "high": "ALTA",
+        "medium": "MEDIA",     "low": "BAJA",
+    }
+
+    for story in stories:
+        prio = story.get("priority", "medium")
+        p_color = _PRIO_COLOR.get(prio, "#6b7280")
+        p_label = _PRIO_ES.get(prio, prio.upper())
+        acs = story.get("acceptance_criteria") or []
+        biz = story.get("business_rules") or []
+
+        with st.expander(f"{story.get('id', '')} — {story.get('title', '')}"):
+            # Badges: prioridad + tipo + ACs
+            story_type = story.get("story_type", "")
+            st.markdown(
+                f'<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.55rem;">'
+                f'<span style="background:{p_color}22;color:{p_color};border:1px solid {p_color};'
+                f'border-radius:20px;padding:.1rem .5rem;font-size:.8rem;font-weight:700;">'
+                f'{p_label}</span>'
+                + (
+                    f'<span style="background:#1e293b;color:#94a3b8;border-radius:20px;'
+                    f'padding:.1rem .5rem;font-size:.8rem;">{story_type}</span>'
+                    if story_type else ""
+                )
+                + f'<span style="background:#1e293b;color:#64748b;border-radius:20px;'
+                f'padding:.1rem .5rem;font-size:.8rem;">{len(acs)} criterios AC</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            # Narrativa
+            st.markdown(
+                f'<div style="background:#0f172a;border:1px solid #1e293b;border-left:3px solid #00bcd4;'
+                f'border-radius:0 6px 6px 0;padding:.6rem .9rem;font-size:.95rem;'
+                f'color:#93c5fd;line-height:1.65;margin-bottom:.55rem;">'
+                f'<b style="color:#c9d1d9;">Como</b> {story.get("as_a", "")}, '
+                f'<b style="color:#c9d1d9;">quiero</b> {story.get("i_want", "")}, '
+                f'<b style="color:#c9d1d9;">para que</b> {story.get("so_that", "")}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            # Reglas de negocio
+            if biz:
+                st.markdown(
+                    '<div style="color:#8b949e;font-size:.8rem;font-weight:600;margin-bottom:.25rem;">'
+                    'Reglas de negocio</div>',
+                    unsafe_allow_html=True,
+                )
+                for rule in biz:
+                    st.markdown(
+                        f'<div style="color:#c9d1d9;font-size:.85rem;padding:.1rem 0 .1rem .65rem;'
+                        f'border-left:2px solid #1e3a5f;margin-bottom:.15rem;">{rule}</div>',
+                        unsafe_allow_html=True,
+                    )
+            # Criterios de aceptación
+            if acs:
+                st.markdown(
+                    f'<div style="color:#8b949e;font-size:.8rem;font-weight:600;'
+                    f'margin:.45rem 0 .25rem;">Criterios de Aceptación</div>',
+                    unsafe_allow_html=True,
+                )
+                for ac in acs:
+                    neg = (
+                        '<span style="color:#f87171;font-size:.78rem;margin-left:.2rem;">[neg]</span>'
+                        if ac.get("is_negative_case") else ""
+                    )
+                    st.markdown(
+                        f'<div style="border-left:2px solid #1e3a5f;padding:.2rem 0 .2rem .6rem;'
+                        f'margin:.15rem 0;font-size:.88rem;">'
+                        f'<b style="color:#00bcd4;">{ac.get("id", "")}</b>{neg}'
+                        f'<span style="color:#8b949e;"> — {ac.get("description", "")}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f'<div style="font-size:.82rem;color:#475569;padding:.05rem 0 .05rem 1.4rem;">'
+                        f'<b style="color:#6b7280;">Dado</b> {ac.get("given","")} &nbsp;'
+                        f'<b style="color:#6b7280;">Cuando</b> {ac.get("when","")} &nbsp;'
+                        f'<b style="color:#6b7280;">Entonces</b> {ac.get("then","")}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+
+def _tab_test_cases(features: list) -> None:
+    """Tab: test cases Gherkin generados por el agente."""
+    total_sc = sum(len(f.get("scenarios") or []) for f in features)
+
+    if not features:
+        st.info(
+            "Aún no se han generado test cases. "
+            "Inicia el análisis de un requerimiento para ver el contenido aquí."
+        )
+        return
+
+    st.markdown(
+        f'<div style="color:#6b7280;font-size:.85rem;margin-bottom:.65rem;">'
+        f'{total_sc} escenario(s) en {len(features)} feature(s)</div>',
+        unsafe_allow_html=True,
+    )
+
+    _TYPE_LABEL = {
+        "positive":       "Positivo",
+        "negative":       "Negativo",
+        "boundary":       "Frontera",
+        "edge_case":      "Caso Borde",
+        "error_handling": "Manejo Error",
+    }
+    _TYPE_COLOR = {
+        "positive":       "#16a34a",
+        "negative":       "#dc2626",
+        "boundary":       "#d97706",
+        "edge_case":      "#7c3aed",
+        "error_handling": "#0891b2",
+    }
+    _ISO_ES = {
+        "functional_suitability": "Funcionalidad",
+        "security":               "Seguridad",
+        "performance_efficiency": "Rendimiento",
+        "usability":              "Usabilidad",
+        "reliability":            "Confiabilidad",
+        "compatibility":          "Compatibilidad",
+        "maintainability":        "Mantenibilidad",
+        "portability":            "Portabilidad",
+    }
+
+    for feature in features:
+        scenarios = feature.get("scenarios") or []
+        with st.expander(
+            f"{feature.get('user_story_id', '')} · {feature.get('name', '')} "
+            f"[{len(scenarios)} escenarios]"
+        ):
+            if feature.get("description"):
+                st.markdown(
+                    f'<div style="color:#6b7280;font-size:.85rem;font-style:italic;'
+                    f'margin-bottom:.5rem;">{feature["description"]}</div>',
+                    unsafe_allow_html=True,
+                )
+            for sc in scenarios:
+                t_label = _TYPE_LABEL.get(sc.get("scenario_type", ""), sc.get("scenario_type", ""))
+                t_color = _TYPE_COLOR.get(sc.get("scenario_type", ""), "#6b7280")
+                iso_key = sc.get("quality_characteristic", "")
+                iso_label = _ISO_ES.get(iso_key, iso_key)
+                steps = sc.get("steps") or []
+                steps_html = "".join(
+                    f'<div style="font-size:.87rem;color:#e2e8f0;margin:.1rem 0;">'
+                    f'<span style="color:#7c3aed;font-weight:700;min-width:52px;'
+                    f'display:inline-block;">{s.get("keyword","")}</span>'
+                    f'{s.get("text","")}</div>'
+                    for s in steps[:5]
+                )
+                if len(steps) > 5:
+                    steps_html += (
+                        f'<div style="font-size:.8rem;color:#475569;">… {len(steps)-5} pasos más</div>'
+                    )
+                tags_html = "".join(
+                    f'<span style="background:#1e293b;color:#64748b;border-radius:4px;'
+                    f'padding:.05em .35em;font-size:.78rem;margin-right:.2rem;">@{t}</span>'
+                    for t in sc.get("tags") or []
+                )
+                st.markdown(
+                    f'<div style="border:1px solid #21262d;border-radius:6px;'
+                    f'padding:.5rem .7rem;margin:.3rem 0;">'
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'align-items:center;margin-bottom:.3rem;flex-wrap:wrap;gap:.3rem;">'
+                    f'<div>'
+                    f'<span style="background:{t_color};color:#fff;border-radius:3px;'
+                    f'padding:.08rem .4rem;font-size:.78rem;font-weight:700;margin-right:.35rem;">'
+                    f'{t_label}</span>'
+                    f'<span style="color:#e2e8f0;font-size:.9rem;font-weight:500;">'
+                    f'{sc.get("name","")}</span>'
+                    f'</div>'
+                    f'<span style="color:#64748b;font-size:.78rem;">{iso_label}</span>'
+                    f'</div>'
+                    + (f'<div style="margin-bottom:.3rem;">{tags_html}</div>' if tags_html else "")
+                    + f'<div style="background:#0f172a;border-radius:4px;padding:.4rem .6rem;">'
+                    f'{steps_html}</div>'
+                    f'<div style="font-size:.78rem;color:#374151;margin-top:.25rem;">'
+                    f'AC: {sc.get("acceptance_criterion_id","")}'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+
+def _tab_report(run_id: str, project: dict, report_data: dict) -> None:
+    """Tab: métricas del reporte y acceso al PDF."""
+    if not report_data:
+        st.info(
+            "Aún no hay reporte generado. "
+            "Completa el flujo HITL para generar el reporte ejecutivo."
+        )
+        return
+
+    # ── KPIs ─────────────────────────────────────────────────────────────────
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1.metric("Historias de Usuario", report_data.get("total_stories", 0))
+    kpi2.metric("Criterios AC", report_data.get("total_acceptance_criteria", 0))
+    kpi3.metric("Test Cases", report_data.get("total_scenarios", 0))
+    kpi4.metric("Cobertura", f"{report_data.get('coverage_pct', 0)}%")
+
+    st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+
+    # ── Requerimiento original ────────────────────────────────────────────────
+    orig = report_data.get("original_requirement", "")
+    if orig:
+        st.markdown(
+            f'<div style="background:#0e1a2e;border:1px solid #1e3a5f;border-radius:8px;'
+            f'padding:.7rem 1rem;font-size:.92rem;color:#93c5fd;white-space:pre-wrap;'
+            f'line-height:1.6;margin-bottom:.75rem;">{orig[:400]}'
+            + ("…" if len(orig) > 400 else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Acciones: PDF + HTML + reporte completo ──────────────────────────────
+    col_pdf, col_html, col_rep = st.columns(3)
+
+    with col_pdf:
+        pdf_b64 = project.get("pdf_base64") or ""
+        if pdf_b64:
+            try:
+                pdf_bytes = base64.b64decode(pdf_b64)
+                st.download_button(
+                    label="Descargar PDF",
+                    data=pdf_bytes,
+                    file_name=f"reporte_{run_id[:8]}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception:
+                st.caption("PDF no disponible")
+        else:
+            st.caption("PDF no disponible.")
+
+    with col_html:
+        html_content = project.get("html_content") or ""
+        if html_content:
+            st.download_button(
+                label="Descargar HTML",
+                data=html_content.encode("utf-8"),
+                file_name=f"reporte_ejecutivo_{run_id[:8]}.html",
+                mime="text/html",
+                use_container_width=True,
+            )
+        else:
+            st.caption("HTML no disponible.")
+
+    with col_rep:
+        if st.button(
+            "Ver Reporte Ejecutivo Completo →",
+            key=f"full_report_{run_id}",
+            type="primary",
+            use_container_width=True,
+        ):
+            entry = {
+                "run_id": run_id,
+                "req_preview": project.get("req_preview", ""),
+                "summary": project.get("summary") or {},
+                "report_data": report_data,
+                "html_content": project.get("html_content"),
+                "pdf_base64": project.get("pdf_base64") or "",
+            }
+            existing_ids = {p["run_id"] for p in st.session_state.projects}
+            if run_id not in existing_ids:
+                st.session_state.projects.insert(0, entry)
+            else:
+                for i, p in enumerate(st.session_state.projects):
+                    if p["run_id"] == run_id:
+                        st.session_state.projects[i].update(entry)
+                        break
+            st.session_state.active_project = run_id
+            st.session_state.analyst_selected_project = None
+            st.session_state.view = "report"
+            st.rerun()
 
 
 def _section_requirements(run_id: str, project: dict) -> None:

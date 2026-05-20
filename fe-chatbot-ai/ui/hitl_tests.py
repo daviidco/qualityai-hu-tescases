@@ -153,10 +153,12 @@ def render_test_review(on_submit) -> None:
 
     col_rev, col_dec = st.columns(2)
     with col_rev:
-        reviewer_name = st.text_input(
-            "Revisor / Aprobador",
-            placeholder="Ej: ana.garcia",
-            key="hitl_reviewer_name",
+        reviewer_name = st.session_state.get("user_email") or st.session_state.get("user_name") or ""
+        st.markdown(
+            f'<div style="font-size:.78rem;color:#6b7280;margin-bottom:.2rem;">Revisor / Aprobador</div>'
+            f'<div style="background:#161b22;border:1px solid #21262d;border-radius:6px;'
+            f'padding:.42rem .7rem;font-size:.85rem;color:#e2e8f0;">{reviewer_name or "—"}</div>',
+            unsafe_allow_html=True,
         )
     with col_dec:
         global_decision = st.selectbox(

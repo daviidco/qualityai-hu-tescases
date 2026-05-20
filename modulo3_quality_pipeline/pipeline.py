@@ -319,6 +319,88 @@ class QualityPipeline:
 
     # ── Métodos para HITL web (3 fases separadas) ────────────────────────────
 
+    def generate_code_from_features(self, features: list[dict]) -> dict:
+        """Reconstruye GherkinTestSuite a partir de features serializadas y genera código."""
+        from .contracts.contract_b import (
+            GherkinFeature, GherkinScenario, GherkinStep,
+            GherkinTestSuite, ScenarioType, QualityCharacteristic,
+        )
+
+        if self._code_agent is None:
+            raise RuntimeError("CodeGeneratorAgent no disponible en este pipeline")
+
+        reconstructed: list[GherkinFeature] = []
+        for f in features:
+            uid = f.get("user_story_id", "")
+            raw_scenarios = f.get("scenarios") or []
+            scenarios: list[GherkinScenario] = []
+            for sc in raw_scenarios:
+                steps_raw = sc.get("steps") or []
+                steps = [
+                    GherkinStep(keyword=s.get("keyword", "Given"), text=s.get("text", "the action is performed"))
+                    for s in steps_raw
+                ]
+                while len(steps) < 3:
+                    steps.append(GherkinStep(keyword="And", text="the system responds correctly"))
+                name = sc.get("name", "Scenario")
+                if len(name) < 10:
+                    name = f"{name} (escenario)"
+                try:
+                    stype = ScenarioType(sc.get("scenario_type", "positive"))
+                except ValueError:
+                    stype = ScenarioType.POSITIVE
+                try:
+                    qchar = QualityCharacteristic(sc.get("quality_characteristic", "functional_suitability"))
+                except ValueError:
+                    qchar = QualityCharacteristic.FUNCTIONAL_SUITABILITY
+                scenarios.append(GherkinScenario(
+                    name=name,
+                    scenario_type=stype,
+                    quality_characteristic=qchar,
+                    tags=sc.get("tags") or [],
+                    steps=steps,
+                    acceptance_criterion_id=sc.get("acceptance_criterion_id", ""),
+                    user_story_id=uid,
+                    heuristic_applied=sc.get("heuristic_applied", "general"),
+                ))
+            if not scenarios:
+                continue
+            reconstructed.append(GherkinFeature(
+                name=f.get("name", "Feature"),
+                description=f.get("description", ""),
+                scenarios=scenarios,
+                user_story_id=uid,
+            ))
+
+        if not reconstructed:
+            raise ValueError("No se pudieron reconstruir features para generar código")
+
+        suite = GherkinTestSuite(features=reconstructed)
+        contract_d = self._code_agent.process(suite)
+
+        return {
+            "generated_code": [
+                {
+                    "filename": m.filename,
+                    "source_code": m.source_code,
+                    "description": m.description,
+                    "user_story_id": m.user_story_id,
+                }
+                for m in contract_d.generated_code
+            ],
+            "generated_tests": [
+                {
+                    "test_name": t.test_name,
+                    "source_code": t.source_code,
+                    "scenario_ids": t.scenario_ids,
+                    "target_module": t.target_module,
+                }
+                for t in contract_d.generated_tests
+            ],
+            "total_modules": contract_d.total_modules,
+            "total_tests": contract_d.total_tests,
+        }
+
     def detect_ambiguities(self, requirement: str) -> list[dict]:
         """Fase 1-a web: solo detección. Sin llamada al LLM."""
         ambiguities = self._req_agent.detect_ambiguities(requirement)

@@ -65,7 +65,7 @@ def _show_toast(msg: str, kind: str = "success") -> None:
 
     js = f"""<script>
 (function(){{
-  var D=window.parent.document,B=D.body;
+  var W=window.parent,D=W.document,B=D.body;
   if(!D.getElementById('qa-tn-css')){{
     var s=D.createElement('style');s.id='qa-tn-css';
     s.textContent=`
@@ -103,16 +103,16 @@ def _show_toast(msg: str, kind: str = "success") -> None:
     +'<div class="qa-tn-msg">{msg_esc}</div>'
     +'</div>'
     +'<button class="qa-tn-close"'
-    +' onclick="document.getElementById(\\\'qa-tn\\\').classList.remove(\\\'qa-tn-in\\\')">'
+    +' onclick="W.clearTimeout(W.__qaTnTid);D.getElementById(\\\'qa-tn\\\').classList.remove(\\\'qa-tn-in\\\')">'
     +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
     +' stroke="#9ca3af" stroke-width="2.5">'
     +'<path d="M18 6L6 18M6 6l12 12"/></svg>'
     +'</button>'
     +'</div>';
-  requestAnimationFrame(function(){{
+  W.requestAnimationFrame(function(){{
     t.classList.add('qa-tn-in');
-    clearTimeout(t._tid);
-    t._tid=setTimeout(function(){{t.classList.remove('qa-tn-in');}},4500);
+    W.clearTimeout(W.__qaTnTid);
+    W.__qaTnTid=W.setTimeout(function(){{t.classList.remove('qa-tn-in');}},4500);
   }});
 }})();
 </script>"""

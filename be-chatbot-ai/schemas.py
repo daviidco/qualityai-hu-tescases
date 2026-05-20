@@ -128,6 +128,29 @@ class FinalizeResponse(BaseModel):
     summary: PipelineSummary
 
 
+# ── Generación de código ─────────────────────────────────────────────────────
+
+class GenerateCodeRequest(BaseModel):
+    run_id: str = Field(..., description="pipeline_run_id del refinamiento analizado")
+    project_id: Optional[str] = None
+    req_id: Optional[str] = None
+
+
+class CodeDecision(BaseModel):
+    filename: str
+    action: str = Field(..., description="accepted | needs_changes")
+    notes: Optional[str] = None
+
+
+class AcceptCodeRequest(BaseModel):
+    run_id: str
+    project_id: Optional[str] = None
+    req_id: Optional[str] = None
+    decisions: list[CodeDecision] = Field(default_factory=list)
+    global_decision: str = Field(..., description="accepted | needs_changes | rejected")
+    reviewer: Optional[str] = None
+
+
 # ── Historial de proyectos ────────────────────────────────────────────────────
 
 class ProjectMeta(BaseModel):
@@ -149,6 +172,11 @@ class ProjectDetailResponse(BaseModel):
     report_data: dict
     html_content: str
     pdf_base64: str
+    generated_code: Optional[list] = None
+    generated_tests: Optional[list] = None
+    code_decisions: Optional[list] = None
+    code_review_status: Optional[str] = None
+    code_reviewer: Optional[str] = None
 
 
 # ── Auth / Usuarios ───────────────────────────────────────────────────────────
@@ -324,6 +352,8 @@ class JiraSubtaskRef(JiraTicketRef):
 
 class JiraExportResponse(BaseModel):
     run_id: str
+    jira_project_key: str
+    jira_project_url: str
     epic_key: str
     epic_url: str
     total_created: int

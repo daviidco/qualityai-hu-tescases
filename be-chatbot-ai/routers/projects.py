@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import mongo_store
 from db import get_db
@@ -124,6 +124,71 @@ async def get_project_detail(
     return project
 
 
+@router.get("/projects/{run_id}/user-stories")
+async def get_project_user_stories(
+    run_id: str,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Retorna las historias de usuario generadas para el proyecto."""
+    doc = await get_db().projects.find_one(
+        {"run_id": run_id},
+        {"_id": 0, "user_stories": 1, "report_data": 1},
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    stories = doc.get("user_stories") or (doc.get("report_data") or {}).get("user_stories") or []
+    return {"user_stories": stories}
+
+
+@router.get("/projects/{run_id}/test-cases")
+async def get_project_test_cases(
+    run_id: str,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Retorna los test cases Gherkin generados para el proyecto."""
+    doc = await get_db().projects.find_one(
+        {"run_id": run_id},
+        {"_id": 0, "test_cases": 1, "report_data": 1},
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    test_cases = doc.get("test_cases") or (doc.get("report_data") or {}).get("features") or []
+    return {"test_cases": test_cases}
+
+
+_REPORTS_DIR = Path("/app/storage/reports")
+
+
+@router.get("/projects/{run_id}/report")
+async def get_project_report(
+    run_id: str,
+    _user: dict = Depends(get_current_user),
+) -> HTMLResponse:
+    """Sirve el reporte HTML ejecutivo del proyecto. Fuente: MongoDB (fallback: volumen)."""
+    # 1. Intentar desde MongoDB (más rápido)
+    doc = await get_db().projects.find_one(
+        {"run_id": run_id},
+        {"_id": 0, "html_content": 1},
+    )
+    if doc and doc.get("html_content"):
+        return HTMLResponse(
+            content=doc["html_content"],
+            headers={"Content-Disposition": f'attachment; filename="reporte_{run_id[:8]}.html"'},
+        )
+
+    # 2. Fallback: buscar en el volumen (útil si MongoDB fue vaciado)
+    report_dir = _REPORTS_DIR / run_id
+    if report_dir.exists():
+        html_files = sorted(report_dir.glob("*.html"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if html_files:
+            return HTMLResponse(
+                content=html_files[0].read_text(encoding="utf-8"),
+                headers={"Content-Disposition": f'attachment; filename="reporte_{run_id[:8]}.html"'},
+            )
+
+    raise HTTPException(status_code=404, detail="Reporte HTML no disponible para este proyecto.")
+
+
 @router.patch("/projects/{run_id}/status", status_code=200)
 async def update_project_status(
     run_id: str,
@@ -186,7 +251,7 @@ async def update_requirement(
     _user: dict = Depends(require_analyst_or_leader),
 ) -> RequirementOut:
     """Actualiza título y contenido de un requerimiento."""
-    await mongo_store.update_requirement(run_id, req_id, body.title, body.content)
+    await mongo_store.update_requirement(run_id, req_id, body.title, body.content, body.attachment_name)
     doc = await mongo_store.get(run_id)
     reqs = doc.get("requirements") or [] if doc else []
     r = next((r for r in reqs if r["req_id"] == req_id), None)
@@ -248,6 +313,16 @@ async def assign_story(
         assigned_by=current_user["email"],
         assigned_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+@router.delete("/projects/{run_id}/stories/{story_id}/assign", status_code=204)
+async def unassign_story(
+    run_id: str,
+    story_id: str,
+    _user: dict = Depends(require_scrum_or_admin),
+) -> None:
+    """Elimina la asignación de un desarrollador a una historia de usuario."""
+    await mongo_store.unassign_story(run_id, story_id)
 
 
 @router.get("/projects/{run_id}/assignments", response_model=list[StoryAssignmentOut])
@@ -413,7 +488,7 @@ async def export_to_jira(
     run_id: str,
     current_user: dict = Depends(require_scrum_or_admin),
 ) -> JiraExportResponse:
-    """Crea la jerarquía Epic → Story → Sub-task en Jira."""
+    """Crea proyecto Jira (si es primera vez) + Epic → Story → Sub-task."""
     project = await mongo_store.get(run_id)
     if not project:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
@@ -425,26 +500,62 @@ async def export_to_jira(
             detail="El proyecto no tiene report_data — completa el pipeline primero",
         )
 
-    from jira_client import create_tickets
+    jira_export = project.get("jira_export") or {}
+    jira_project_key = jira_export.get("jira_project_key")
+
+    from jira_client import (
+        _generate_project_key,
+        create_jira_project,
+        create_tickets,
+    )
+
+    # ── 1. Crear proyecto Jira si es primera exportación ─────────────────────
+    project_name = (
+        project.get("project_name")
+        or (project.get("req_preview") or "")[:40]
+        or f"Project {run_id[:8]}"
+    )
+    if not jira_project_key:
+        project_key = _generate_project_key(project_name)
+        try:
+            jira_project = await run_in_threadpool(
+                create_jira_project,
+                project_name=project_name,
+                project_key=project_key,
+                lead_email=current_user["email"],
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        jira_project_key = jira_project["key"]
+    else:
+        jira_project = {"key": jira_project_key, "url": None}
+
+    # ── 2. Crear tickets ─────────────────────────────────────────────────────
     try:
-        tickets = await run_in_threadpool(create_tickets, report_data, run_id)
+        tickets = await run_in_threadpool(
+            create_tickets, jira_project_key, report_data, run_id, current_user["email"]
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
+    # ── 3. Persistir en MongoDB ──────────────────────────────────────────────
     db = get_db()
+    new_export = {
+        "jira_project_key": jira_project_key,
+        "jira_project_url": jira_project.get("url"),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_by": current_user["email"],
+        **tickets,
+    }
     await db.projects.update_one(
         {"run_id": run_id},
-        {"$set": {
-            "jira_export": {
-                "exported_at": datetime.now(timezone.utc).isoformat(),
-                "exported_by": current_user["email"],
-                **tickets,
-            }
-        }},
+        {"$set": {"jira_export": new_export}},
     )
 
     return JiraExportResponse(
         run_id=run_id,
+        jira_project_key=jira_project_key,
+        jira_project_url=jira_project.get("url") or "",
         epic_key=tickets["epic"]["key"],
         epic_url=tickets["epic"]["url"],
         total_created=tickets["total_created"],

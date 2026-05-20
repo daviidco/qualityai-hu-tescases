@@ -8,15 +8,15 @@ Pipeline de generación de calidad de software asistido por IA: transforma reque
 
 Los equipos de QA y análisis de requerimientos invierten horas convirtiendo descripciones de negocio en artefactos verificables. QualityAI M3 automatiza ese proceso en tres etapas secuenciales, manteniendo al analista en el centro del flujo:
 
-| Problema | Solución |
-|---|---|
-| Requerimientos ambiguos llegan al desarrollo | Detector determinístico (IEEE 830) + resolución explícita antes del LLM |
-| Test cases generados sin trazabilidad | Contract A → Contract B con cobertura AC-por-AC |
-| Sin visibilidad de riesgos no funcionales | Mapeo automático a ISO 25010, matriz de riesgos y recomendaciones |
-| El analista pierde control sobre la IA | HITL en dos puntos: ambigüedades y aprobación de test cases |
-| Proyectos generados se pierden al cerrar | Historial persistente en disco, recuperable entre sesiones |
-| LLMs con límite de tokens truncan el JSON | Reparación automática con `json_repair` + límites explícitos en el prompt |
-| Rate limit del proveedor LLM da error 500 | Detección y banner informativo en el frontend con tiempo de espera |
+| Problema                                     | Solución                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| Requerimientos ambiguos llegan al desarrollo | Detector determinístico (IEEE 830) + resolución explícita antes del LLM   |
+| Test cases generados sin trazabilidad        | Contract A → Contract B con cobertura AC-por-AC                           |
+| Sin visibilidad de riesgos no funcionales    | Mapeo automático a ISO 25010, matriz de riesgos y recomendaciones         |
+| El analista pierde control sobre la IA       | HITL en dos puntos: ambigüedades y aprobación de test cases               |
+| Proyectos generados se pierden al cerrar     | Historial persistente en disco, recuperable entre sesiones                |
+| LLMs con límite de tokens truncan el JSON    | Reparación automática con `json_repair` + límites explícitos en el prompt |
+| Rate limit del proveedor LLM da error 500    | Detección y banner informativo en el frontend con tiempo de espera        |
 
 ---
 
@@ -64,24 +64,26 @@ Los equipos de QA y análisis de requerimientos invierten horas convirtiendo des
 ## Tecnologías
 
 ### Backend
-| Tecnología | Rol |
-|---|---|
-| **FastAPI** | API REST, gestión de sesiones HITL server-side |
-| **Pydantic v2** | Contratos tipados (Contract A / B / C) |
-| **ChromaDB** | Vector store para recuperación RAG |
-| **sentence-transformers** | Cross-encoder reranker (`ms-marco-MiniLM-L-6-v2`) |
-| **rank-bm25** | Recuperación BM25 léxica en el paso de retrieval |
-| **Gemini API** | Embeddings (`gemini-embedding-001`) y generación |
+
+| Tecnología                     | Rol                                                  |
+| ------------------------------ | ---------------------------------------------------- |
+| **FastAPI**                    | API REST, gestión de sesiones HITL server-side       |
+| **Pydantic v2**                | Contratos tipados (Contract A / B / C)               |
+| **ChromaDB**                   | Vector store para recuperación RAG                   |
+| **sentence-transformers**      | Cross-encoder reranker (`ms-marco-MiniLM-L-6-v2`)    |
+| **rank-bm25**                  | Recuperación BM25 léxica en el paso de retrieval     |
+| **Gemini API**                 | Embeddings (`gemini-embedding-001`) y generación     |
 | **Groq / DeepSeek / Cerebras** | Proveedores LLM alternativos (seleccionable por env) |
-| **json_repair** | Repara JSON truncado por límites de tokens del LLM |
-| **fpdf2 + DejaVu** | Generación de reporte PDF con soporte UTF-8 completo |
-| **uvicorn** | ASGI server |
+| **json_repair**                | Repara JSON truncado por límites de tokens del LLM   |
+| **fpdf2 + DejaVu**             | Generación de reporte PDF con soporte UTF-8 completo |
+| **uvicorn**                    | ASGI server                                          |
 
 ### Frontend
-| Tecnología | Rol |
-|---|---|
-| **Streamlit** | Framework web Python para UI reactiva |
-| **httpx** | Cliente HTTP hacia el backend |
+
+| Tecnología         | Rol                                                             |
+| ------------------ | --------------------------------------------------------------- |
+| **Streamlit**      | Framework web Python para UI reactiva                           |
+| **httpx**          | Cliente HTTP hacia el backend                                   |
 | **report_view.py** | Reporte ejecutivo renderizado en Streamlit nativo (tema oscuro) |
 
 ---
@@ -89,6 +91,7 @@ Los equipos de QA y análisis de requerimientos invierten horas convirtiendo des
 ## Componentes
 
 ### `modulo3_quality_pipeline/`
+
 El núcleo del sistema. Pipeline secuencial independiente del frontend.
 
 ```
@@ -119,6 +122,7 @@ modulo3_quality_pipeline/
 ```
 
 ### `be-chatbot-ai/`
+
 API REST que expone el pipeline al frontend.
 
 ```
@@ -133,6 +137,7 @@ be-chatbot-ai/
 ```
 
 ### `fe-chatbot-ai/`
+
 Aplicación Streamlit con flujo de 4 vistas.
 
 ```
@@ -190,6 +195,7 @@ El analista interviene en **dos puntos críticos** antes de que el LLM tome deci
 ## Reporte generado
 
 El reporte nativo (tema oscuro) incluye:
+
 - **KPIs**: historias, criterios, tests generados, cobertura %
 - **Ambigüedades** detectadas y resueltas (LLM vs. analista)
 - **Historias de Usuario** con criterios de aceptación (acordeones interactivos)
@@ -205,6 +211,7 @@ El reporte nativo (tema oscuro) incluye:
 ## Historial de proyectos
 
 Cada reporte generado se persiste automáticamente en disco. Al recargar la aplicación:
+
 - El sidebar lista todos los proyectos anteriores (metadatos: fecha, HU, tests, cobertura)
 - Al hacer clic en un proyecto se carga el reporte completo bajo demanda (carga lazy)
 - Los datos sobreviven reinicios del contenedor gracias al volumen Docker `projects_data`
@@ -248,7 +255,7 @@ cp modulo3_quality_pipeline/.env.example modulo3_quality_pipeline/.env
 
 ```bash
 # Primera vez — construye imágenes (~5 min por la descarga de modelos)
-docker compose up --build
+docker compose up --build -d
 
 # Levantamiento posterior (imágenes ya construidas)
 docker compose up
@@ -278,27 +285,27 @@ streamlit run app.py
 
 ### Variables de entorno relevantes
 
-| Variable | Descripción | Ejemplo |
-|---|---|---|
-| `LLM_PROVIDER` | Proveedor LLM activo | `gemini` / `groq` / `deepseek` / `cerebras` |
-| `GEMINI_API_KEY` | Siempre requerida (embeddings) | `AIza...` |
-| `GROQ_API_KEY` | Requerida si `LLM_PROVIDER=groq` | `gsk_...` |
-| `DEEPSEEK_API_KEY` | Requerida si `LLM_PROVIDER=deepseek` | `sk-...` |
-| `CEREBRAS_API_KEY` | Requerida si `LLM_PROVIDER=cerebras` | `csk-...` |
-| `ECO_MODE` | Modo de bajo consumo de tokens | `true` / `false` |
-| `BACKEND_URL` | URL del backend (solo FE) | `http://localhost:8000/api/v1` |
+| Variable           | Descripción                          | Ejemplo                                     |
+| ------------------ | ------------------------------------ | ------------------------------------------- |
+| `LLM_PROVIDER`     | Proveedor LLM activo                 | `gemini` / `groq` / `deepseek` / `cerebras` |
+| `GEMINI_API_KEY`   | Siempre requerida (embeddings)       | `AIza...`                                   |
+| `GROQ_API_KEY`     | Requerida si `LLM_PROVIDER=groq`     | `gsk_...`                                   |
+| `DEEPSEEK_API_KEY` | Requerida si `LLM_PROVIDER=deepseek` | `sk-...`                                    |
+| `CEREBRAS_API_KEY` | Requerida si `LLM_PROVIDER=cerebras` | `csk-...`                                   |
+| `ECO_MODE`         | Modo de bajo consumo de tokens       | `true` / `false`                            |
+| `BACKEND_URL`      | URL del backend (solo FE)            | `http://localhost:8000/api/v1`              |
 
 ---
 
 ## Endpoints del Backend
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| `GET` | `/health` | Health check |
-| `POST` | `/api/v1/pipeline/analyze` | Detecta ambigüedades, crea sesión |
-| `POST` | `/api/v1/pipeline/generate-tests` | Genera Contract A + B con resoluciones |
-| `POST` | `/api/v1/pipeline/finalize` | Aplica decisiones, genera reporte + PDF |
-| `GET` | `/api/v1/pipeline/projects` | Lista historial de proyectos (metadatos) |
-| `GET` | `/api/v1/pipeline/projects/{run_id}` | Detalle completo de un proyecto |
+| Método | Ruta                                 | Descripción                              |
+| ------ | ------------------------------------ | ---------------------------------------- |
+| `GET`  | `/health`                            | Health check                             |
+| `POST` | `/api/v1/pipeline/analyze`           | Detecta ambigüedades, crea sesión        |
+| `POST` | `/api/v1/pipeline/generate-tests`    | Genera Contract A + B con resoluciones   |
+| `POST` | `/api/v1/pipeline/finalize`          | Aplica decisiones, genera reporte + PDF  |
+| `GET`  | `/api/v1/pipeline/projects`          | Lista historial de proyectos (metadatos) |
+| `GET`  | `/api/v1/pipeline/projects/{run_id}` | Detalle completo de un proyecto          |
 
 Documentación interactiva completa: `http://localhost:8000/docs`

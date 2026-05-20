@@ -142,15 +142,18 @@ async def add_requirement(
 
 
 async def update_requirement(
-    run_id: str, req_id: str, title: str | None, content: str | None
+    run_id: str, req_id: str, title: str | None, content: str | None,
+    attachment_name: str | None = None,
 ) -> bool:
-    """Actualiza título y/o contenido de un requerimiento."""
+    """Actualiza título, contenido y/o adjunto de un requerimiento."""
     db = get_db()
     set_fields: dict = {}
     if title is not None:
         set_fields["requirements.$.title"] = title
     if content is not None:
         set_fields["requirements.$.content"] = content
+    if attachment_name is not None:
+        set_fields["requirements.$.attachment_name"] = attachment_name
     if not set_fields:
         return False
     result = await db.projects.update_one(
@@ -235,7 +238,8 @@ async def link_pipeline(
 ) -> bool:
     """Vincula el resultado del pipeline a un proyecto (y a un requerimiento específico)."""
     db = get_db()
-    hitl = pipeline_data.get("report_data", {}).get("hitl", {})
+    report_data = pipeline_data.get("report_data") or {}
+    hitl = report_data.get("hitl", {})
     summary = pipeline_data.get("summary", {})
     run_id = pipeline_data.get("run_id", "")
 
@@ -247,10 +251,13 @@ async def link_pipeline(
             "review_status": hitl.get("review_status", "pending_review"),
             "reviewer": hitl.get("reviewer"),
             "summary": summary,
-            "report_data": pipeline_data.get("report_data"),
+            "report_data": report_data,
+            "user_stories": report_data.get("user_stories") or [],
+            "test_cases": report_data.get("features") or [],
             "html_content": pipeline_data.get("html_content"),
             "pdf_base64": pipeline_data.get("pdf_base64"),
-            "llm_provider": pipeline_data.get("report_data", {}).get("llm_provider", ""),
+            "llm_provider": report_data.get("llm_provider", ""),
+            "last_analyzed_at": datetime.now(timezone.utc),
         }},
     )
 
@@ -274,6 +281,36 @@ async def link_pipeline(
     return result.modified_count > 0
 
 
+async def save_generated_code(run_id: str, code_data: dict) -> None:
+    """Guarda el código generado en el documento del refinamiento (pipeline run)."""
+    db = get_db()
+    await db.projects.update_one(
+        {"run_id": run_id},
+        {"$set": {
+            "generated_code": code_data.get("generated_code", []),
+            "generated_tests": code_data.get("generated_tests", []),
+            "code_generation_status": "generated",
+            "code_generated_at": datetime.now(timezone.utc),
+        }},
+    )
+
+
+async def save_code_decisions(
+    run_id: str, decisions: list[dict], global_decision: str, reviewer: str
+) -> None:
+    """Guarda las decisiones HITL sobre el código generado."""
+    db = get_db()
+    await db.projects.update_one(
+        {"run_id": run_id},
+        {"$set": {
+            "code_review_status": global_decision,
+            "code_reviewer": reviewer,
+            "code_decisions": decisions,
+            "code_reviewed_at": datetime.now(timezone.utc),
+        }},
+    )
+
+
 async def assign_story(
     run_id: str, story_id: str, dev_email: str, assigned_by: str
 ) -> None:
@@ -291,6 +328,16 @@ async def assign_story(
             "assigned_at": datetime.now(timezone.utc).isoformat(),
         }}},
     )
+
+
+async def unassign_story(run_id: str, story_id: str) -> bool:
+    """Elimina la asignación de un desarrollador a una historia."""
+    db = get_db()
+    result = await db.projects.update_one(
+        {"run_id": run_id},
+        {"$pull": {"story_assignments": {"story_id": story_id}}},
+    )
+    return result.modified_count > 0
 
 
 async def get_story_assignments(run_id: str) -> list[dict]:
