@@ -53,6 +53,9 @@ class HybridRetriever(IRetriever):
     ) -> list[dict[str, Any]]:
         """Pipeline completo: HyDE → BM25 + Dense → RRF → top_k candidatos."""
 
+        if self._repo.count() == 0:
+            return []
+
         # Etapa 1: HyDE — expandir query en documento hipotético
         if expand_for == "patterns":
             expanded_query = self._expander.expand_for_patterns(query)

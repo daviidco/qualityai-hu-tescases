@@ -25,6 +25,7 @@ router = APIRouter(tags=["Pipeline HITL"])
 def _raise_http(exc: Exception) -> None:
     """Convierte excepciones del pipeline en HTTP errors apropiados."""
     detail = str(exc)
+    logger.exception("❌ Pipeline error: %s", detail)
     if "RATE_LIMIT" in detail:
         raise HTTPException(status_code=429, detail=detail.replace("RATE_LIMIT: ", ""))
     raise HTTPException(status_code=500, detail=detail)

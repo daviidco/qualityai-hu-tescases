@@ -345,7 +345,14 @@ class QualityPipeline:
         output_dir = Path(self._settings.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        contract_a = self._req_agent.process_with_resolutions(requirement, analyst_resolutions)
+        print("[run_stages_1_2] Iniciando process_with_resolutions...")
+        import traceback
+        try:
+            contract_a = self._req_agent.process_with_resolutions(requirement, analyst_resolutions)
+        except Exception as exc:
+            print(f"[run_stages_1_2] process_with_resolutions falló: {exc}")
+            traceback.print_exc()
+            raise
         contract_a_path = output_dir / f"contract_a_{contract_a.pipeline_run_id}.json"
         self._save_model(contract_a, contract_a_path)
 
