@@ -108,6 +108,24 @@ _GEN_CODE_CSS = (
     'background:#6d28d9!important;border-color:#6d28d9!important;}'
     '[class*="st-key-gen_code_"] button[disabled]{'
     'background:transparent!important;border-color:#374151!important;color:#6b7280!important;opacity:.5!important;}'
+    '[class*="st-key-hero_add_"] button{'
+    'background:#2563eb!important;color:#fff!important;border:1px solid #2563eb!important;'
+    'font-size:.78rem!important;padding:.15rem .4rem!important;line-height:1.3!important;'
+    'min-height:unset!important;height:auto!important;}'
+    '[class*="st-key-hero_edit_"] button{'
+    'background:#d97706!important;color:#fff!important;border:1px solid #d97706!important;'
+    'font-size:.78rem!important;padding:.15rem .4rem!important;line-height:1.3!important;'
+    'min-height:unset!important;height:auto!important;}'
+    '[class*="st-key-hero_del_"] button{'
+    'background:#dc2626!important;color:#fff!important;border:1px solid #dc2626!important;'
+    'font-size:.72rem!important;padding:.1rem .35rem!important;line-height:1.2!important;'
+    'min-height:unset!important;height:auto!important;}'
+    '.stHorizontalBlock:has([class*="st-key-hero_add_"]){'
+    'flex-wrap:nowrap!important;justify-content:flex-end!important;gap:6px!important;}'
+    '.stHorizontalBlock:has([class*="st-key-hero_add_"])>.stColumn{'
+    'flex:none!important;width:auto!important;}'
+    '.stHorizontalBlock:has([class*="st-key-hero_add_"])>.stColumn:first-child{'
+    'flex:1!important;width:auto!important;}'
     '</style>'
 )
 
@@ -1324,15 +1342,15 @@ def _render_project_detail(run_id: str) -> None:
         unsafe_allow_html=True,
     )
     # ── Hero toolbar: native Streamlit buttons ─────────────────────────────────
-    _col_add, _col_edit, _col_del, _ = st.columns([1.2, 1, 1, 4.8])
+    _, _col_add, _col_edit, _col_del = st.columns([4.8, 1.2, 1, 1])
     with _col_add:
-        if st.button("＋ Agregar req", key=f"hero_add_{run_id}", use_container_width=True):
+        if st.button("＋ Agregar req", key=f"hero_add_{run_id}"):
             _add_req_to_project_dialog(run_id)
     with _col_edit:
-        if st.button("✎ Editar", key=f"hero_edit_{run_id}", use_container_width=True):
+        if st.button("✎ Editar", key=f"hero_edit_{run_id}"):
             _edit_project_modal(run_id, project)
     with _col_del:
-        if st.button("🗑 Eliminar", key=f"hero_del_{run_id}", use_container_width=True):
+        if st.button("🗑 Eliminar", key=f"hero_del_{run_id}"):
             _delete_project_dialog(run_id, project, _has_analysis)
 
     # ── Hidden logo uploader (JS-triggered via click on .qa-dlog-wrap) ───────
@@ -2935,6 +2953,10 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
     br_cov    = cr.get("branch_coverage_pct") or code_result.get("branch_coverage_pct") or 0
     cmmi_ok   = tm.get("cmmi_l3_compliant") or code_result.get("cmmi_l3_compliant") or False
     v4_status = v4_review.get("review_status", "")
+    v4_auto_approved = (
+        not existing_decisions
+        and v4_status in ("approved", "APPROVED")
+    )
 
     badges_html = (
         f'<span style="background:#1e2533;border:1px solid #30363d;border-radius:8px;'
@@ -2970,8 +2992,29 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
     )
 
     # ── V4 auto-review notice ─────────────────────────────────────────────────
-    if v4_status and not existing_global:
-        st.info("🤖 **Revisión automática V4 disponible** — los resultados del agente se muestran como punto de partida. Guarda tus decisiones para registrar la revisión humana.")
+    if v4_auto_approved:
+        st.markdown(
+            '<div style="background:#0c1a2e;border:1px solid #1d4ed8;border-left:4px solid #3b82f6;'
+            'border-radius:8px;padding:.7rem 1rem;margin-bottom:.75rem;">'
+            '<div style="color:#93c5fd;font-weight:700;font-size:.88rem;margin-bottom:.2rem;">'
+            '🤖 Pre-aprobado por revisión automática V4</div>'
+            '<div style="color:#6b7280;font-size:.81rem;">'
+            'El agente revisó y aprobó todos los módulos. Puedes aceptar esta decisión '
+            'guardándola directamente, o sobrescribir módulo a módulo antes de guardar.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    elif v4_status and not existing_global:
+        st.markdown(
+            '<div style="background:#1a1200;border:1px solid #92400e;border-left:4px solid #f59e0b;'
+            'border-radius:8px;padding:.7rem 1rem;margin-bottom:.75rem;">'
+            '<div style="color:#fbbf24;font-weight:700;font-size:.88rem;margin-bottom:.2rem;">'
+            f'🤖 Revisión automática V4: {v4_status}</div>'
+            '<div style="color:#6b7280;font-size:.81rem;">'
+            'Revisa los resultados del agente y guarda tu decisión final.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Quality dashboard ─────────────────────────────────────────────────────
     if qr:
@@ -3150,21 +3193,32 @@ def _tab_codigo_generado(ref_run_id: str, ref_data: dict) -> None:
     # ── Per-module code + HITL ────────────────────────────────────────────────
     decisions_state_key = f"_code_decisions_{ref_run_id}"
     if decisions_state_key not in st.session_state:
-        # Seed: human decisions > V4 auto-review change_history > default accepted
+        # Seed priority: human HITL > V4 change_history > V4 global-approved > default accepted
+        # V4 uses "approved" as action; map to our radio value "accepted"
+        _v4_action_map = {"approved": "accepted", "rejected": "needs_changes",
+                          "needs_changes": "needs_changes", "accepted": "accepted"}
+
         v4_changes: dict[str, dict] = {}
         for ch in (v4_review.get("change_history") or []):
             tgt = ch.get("target", "")
             if tgt:
-                v4_changes[tgt] = {"action": ch.get("action", "accepted"), "notes": ch.get("notes") or ""}
+                raw_action = ch.get("action", "approved")
+                v4_changes[tgt] = {
+                    "action": _v4_action_map.get(raw_action, "accepted"),
+                    "notes":  ch.get("notes") or ("Auto-aprobado por V4" if raw_action == "approved" else ""),
+                }
+
         st.session_state[decisions_state_key] = {
             m["filename"]: {
                 "action": (
                     existing_decisions.get(m["filename"], {}).get("action")
-                    or v4_changes.get(m["filename"], {}).get("action", "accepted")
+                    or v4_changes.get(m["filename"], {}).get("action")
+                    or ("accepted" if v4_auto_approved else "accepted")
                 ),
                 "notes": (
                     existing_decisions.get(m["filename"], {}).get("notes")
-                    or v4_changes.get(m["filename"], {}).get("notes", "")
+                    or v4_changes.get(m["filename"], {}).get("notes")
+                    or ("Auto-aprobado por V4" if v4_auto_approved else "")
                 ),
             }
             for m in modules
