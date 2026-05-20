@@ -1591,29 +1591,55 @@ def _req_card(run_id: str, req: dict) -> None:
 
 
 def _req_add_form(run_id: str) -> None:
-    with st.form(f"req_add_{run_id}", clear_on_submit=True):
-        new_title   = st.text_input("Título *", placeholder="Ej: Módulo de autenticación SSO")
-        new_content = st.text_area(
-            "Descripción *", height=140,
-            placeholder="Describe el requerimiento de forma libre…",
-        )
-        save = st.form_submit_button("Agregar requerimiento", type="primary",
-                                     use_container_width=True)
-    if save:
+    _k_title   = f"_at_{run_id}"
+    _k_content = f"_ac_{run_id}"
+    _k_file    = f"_af_{run_id}"
+    _k_loaded  = f"_al_{run_id}"
+
+    st.text_input("Título *", key=_k_title,
+                  placeholder="Ej: Módulo de autenticación SSO")
+
+    uploaded = st.file_uploader(
+        "Adjuntar archivo (opcional)",
+        type=["txt", "pdf", "docx"],
+        key=_k_file,
+        help="El texto extraído se colocará automáticamente en el campo de requerimiento",
+    )
+    if uploaded:
+        fname = uploaded.name
+        if fname != st.session_state.get(_k_loaded):
+            extracted = _extract_req_text(uploaded)
+            st.session_state[_k_content] = extracted
+            st.session_state[_k_loaded] = fname
+
+    st.text_area("Requerimiento en bruto *", key=_k_content,
+                 height=180, placeholder="Describe el requerimiento de forma libre…")
+
+    if st.button("Agregar requerimiento", type="primary", use_container_width=True):
+        title   = st.session_state.get(_k_title, "").strip()
+        content = st.session_state.get(_k_content, "").strip()
         errors = []
-        if not new_title.strip():
+        if not title:
             errors.append("El título es obligatorio.")
-        if not new_content.strip() or len(new_content.strip()) < 20:
-            errors.append("El contenido debe tener al menos 20 caracteres.")
+        if len(content) < 20:
+            errors.append("El requerimiento debe tener al menos 20 caracteres.")
         for e in errors:
             st.error(e)
         if errors:
             return
+
+        attachment_name = st.session_state.pop(_k_loaded, None)
+        payload: dict = {"title": title, "content": content}
+        if attachment_name:
+            payload["attachment_name"] = attachment_name
+
         result = api.post(
             f"{BACKEND}/projects/{run_id}/requirements",
-            {"title": new_title.strip(), "content": new_content.strip()},
+            payload,
         )
         if result is not None:
+            for k in [_k_title, _k_content, _k_file]:
+                st.session_state.pop(k, None)
             st.rerun()
 
 
