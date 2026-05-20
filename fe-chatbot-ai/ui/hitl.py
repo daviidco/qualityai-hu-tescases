@@ -19,7 +19,7 @@ def render_hitl_review() -> None:
         '<div style="background:#0e1e2e;border:1px solid #0e4f6b;border-radius:8px;'
         'padding:1rem 1.2rem;margin-bottom:1rem;">'
         '<div style="color:#00bcd4;font-weight:700;margin-bottom:0.25rem;">'
-        "🧑‍💻 Revisión del Analista Requerida</div>"
+        "Revisión del Analista Requerida</div>"
         '<div style="color:#8b949e;font-size:0.85rem;">'
         "El detector encontró términos ambiguos. Resuelve cada uno antes de generar las historias."
         "</div></div>",
@@ -58,14 +58,22 @@ def render_hitl_review() -> None:
 
 def _render_amb_card(amb: dict) -> None:
     sev = amb.get("severity", "baja")
-    badge = {"alta": "🔴 ALTA", "media": "🟡 MEDIA", "baja": "🟢 BAJA"}.get(sev, sev)
+    _SEV_COLOR = {"alta": "#dc2626", "media": "#d97706", "baja": "#16a34a"}
+    _SEV_LABEL = {"alta": "ALTA", "media": "MEDIA", "baja": "BAJA"}
+    sev_color = _SEV_COLOR.get(sev, "#6b7280")
+    sev_label = _SEV_LABEL.get(sev, sev.upper())
+    badge = (
+        f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
+        f'background:{sev_color};margin-right:4px;vertical-align:middle;"></span>'
+        f'<span style="color:{sev_color};font-weight:700;">{sev_label}</span>'
+    )
     st.markdown(
         f'<div class="hitl-card">'
         f'<div class="hitl-word">"{amb["word"]}"'
         f'  <span style="font-size:0.75rem;color:#475569;font-weight:400;">'
         f'{badge} · {amb.get("category", "").replace("_", " ")}</span></div>'
         f'<div class="hitl-meta">Contexto: <em>{amb.get("context", "")}</em></div>'
-        f'<div class="hitl-suggestion">💡 {amb.get("suggestion", "")}</div>'
+        f'<div class="hitl-suggestion">{amb.get("suggestion", "")}</div>'
         f"</div>",
         unsafe_allow_html=True,
     )

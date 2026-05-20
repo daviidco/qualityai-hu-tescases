@@ -22,6 +22,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from typing import TYPE_CHECKING, Optional
+
 from .agents.requirements_agent import RequirementsAgent
 from .agents.test_architect_agent import TestArchitectAgent
 from .config import Settings
@@ -33,6 +35,7 @@ from .contracts.contract_b import (
     ReviewStatus,
 )
 from .contracts.contract_c import (
+    CodeGenerationSummary,
     ExecutiveReport,
     PipelineStageRecord,
     PipelineStageStatus,
@@ -41,7 +44,14 @@ from .contracts.contract_c import (
     RequirementsExecutiveSummary,
     TestSuiteExecutiveSummary,
 )
+from .contracts.contract_d import CodeGenerationResult, SecuritySeverity
 from .reporting.interfaces import IReportGenerator
+
+if TYPE_CHECKING:
+    from .agents.code_generator_agent import CodeGeneratorAgent
+    from .agents.static_analysis_agent import StaticAnalysisAgent
+    from .agents.traceability_agent import TraceabilityAgent
+    from .agents.code_review_agent import CodeReviewAgent
 
 
 class QualityPipeline:
@@ -53,11 +63,46 @@ class QualityPipeline:
         test_agent: TestArchitectAgent,
         reporter: IReportGenerator,
         settings: Settings,
+        code_agent: Optional["CodeGeneratorAgent"] = None,
+        static_agent: Optional["StaticAnalysisAgent"] = None,
+        traceability_agent: Optional["TraceabilityAgent"] = None,
+        review_agent: Optional["CodeReviewAgent"] = None,
     ) -> None:
         self._req_agent = requirements_agent
         self._test_agent = test_agent
         self._reporter = reporter
         self._settings = settings
+        self._code_agent = code_agent
+        self._static_agent = static_agent
+        self._traceability_agent = traceability_agent
+        self._review_agent = review_agent
+
+    def swap_llm(self, new_settings: "Settings") -> None:
+        """Reemplaza el proveedor LLM sin reconstruir la RAG stack (ChromaDB/CrossEncoder)."""
+        from .llm.factory import create_llm
+        new_llm = create_llm(new_settings)
+        self.swap_llm_provider(new_llm, new_settings)
+
+    def swap_llm_provider(
+        self,
+        provider: "ILLMProvider",
+        settings: "Settings | None" = None,
+    ) -> None:
+        """Hot-swap directo de un ILLMProvider (p.ej. FallbackLLMProvider desde MongoDB)."""
+        from .llm.interfaces import ILLMProvider  # import local para evitar circular
+        self._req_agent._llm = provider
+        self._test_agent._llm = provider
+        self._req_agent._retriever._expander._llm = provider
+        self._test_agent._retriever._expander._llm = provider
+        if self._code_agent is not None:
+            self._code_agent._llm = provider
+            self._code_agent._retriever._expander._llm = provider
+        if settings is not None:
+            self._req_agent._settings = settings
+            self._test_agent._settings = settings
+            if self._code_agent is not None:
+                self._code_agent._settings = settings
+            self._settings = settings
 
     def run(
         self,
@@ -127,9 +172,107 @@ class QualityPipeline:
         self._save_model(contract_b, contract_b_path)
         print(f"  ✅ Contract B guardado: {contract_b_path.name}")
 
-        # ── Etapa 3: Construir Contract C + reporte HTML ──────────────────────
+        # ── Etapa 3: Generación de código (CodeGeneratorAgent) ───────────────
+        contract_d: CodeGenerationResult | None = None
+        if self._code_agent is not None:
+            print("\n" + "=" * 60)
+            print("🤖 ETAPA 3: Generación de Código Python")
+            print("=" * 60)
+            stage3 = PipelineStageRecord(stage_name="code_generation")
+            t0 = datetime.now()
+            try:
+                contract_d = self._code_agent.process(contract_b)
+                stage3.status = PipelineStageStatus.SUCCESS
+                stage3.llm_calls = self._code_agent.metrics["llm_calls"]
+                stage3.rag_retrievals = self._code_agent.metrics["rag_retrievals"]
+            except Exception as exc:  # noqa: BLE001
+                stage3.status = PipelineStageStatus.FAILED
+                stage3.errors.append(str(exc))
+                print(f"  ⚠️  Stage 3 falló: {exc}")
+            stage3.completed_at = datetime.now()
+            stage3.duration_seconds = (stage3.completed_at - t0).total_seconds()
+            stages.append(stage3)
+        else:
+            stages.append(PipelineStageRecord(
+                stage_name="code_generation", status=PipelineStageStatus.SKIPPED,
+            ))
+
+        # ── Etapa 4: Análisis estático (StaticAnalysisAgent) ─────────────────
+        if contract_d is not None and self._static_agent is not None:
+            print("\n" + "=" * 60)
+            print("🔬 ETAPA 4: Análisis Estático de Código")
+            print("=" * 60)
+            stage4 = PipelineStageRecord(stage_name="static_analysis")
+            t0 = datetime.now()
+            try:
+                contract_d = self._static_agent.analyze(contract_d)
+                stage4.status = PipelineStageStatus.SUCCESS
+            except Exception as exc:  # noqa: BLE001
+                stage4.status = PipelineStageStatus.FAILED
+                stage4.errors.append(str(exc))
+                print(f"  ⚠️  Stage 4 falló: {exc}")
+            stage4.completed_at = datetime.now()
+            stage4.duration_seconds = (stage4.completed_at - t0).total_seconds()
+            stages.append(stage4)
+        else:
+            stages.append(PipelineStageRecord(
+                stage_name="static_analysis", status=PipelineStageStatus.SKIPPED,
+            ))
+
+        # ── Etapa 5: Trazabilidad CMMI L3 + cobertura (TraceabilityAgent) ────
+        if contract_d is not None and self._traceability_agent is not None:
+            print("\n" + "=" * 60)
+            print("🗺  ETAPA 5: Trazabilidad CMMI L3 + Branch Coverage")
+            print("=" * 60)
+            stage5 = PipelineStageRecord(stage_name="traceability")
+            t0 = datetime.now()
+            try:
+                contract_d = self._traceability_agent.trace(contract_d, contract_b)
+                stage5.status = PipelineStageStatus.SUCCESS
+            except Exception as exc:  # noqa: BLE001
+                stage5.status = PipelineStageStatus.FAILED
+                stage5.errors.append(str(exc))
+                print(f"  ⚠️  Stage 5 falló: {exc}")
+            stage5.completed_at = datetime.now()
+            stage5.duration_seconds = (stage5.completed_at - t0).total_seconds()
+            stages.append(stage5)
+        else:
+            stages.append(PipelineStageRecord(
+                stage_name="traceability", status=PipelineStageStatus.SKIPPED,
+            ))
+
+        # ── Etapa 6: Revisión HITL senior developer (solo interactive) ───────
+        if contract_d is not None and self._review_agent is not None and interactive:
+            print("\n" + "=" * 60)
+            print("👨‍💻 ETAPA 6: Revisión de Código (Senior Developer)")
+            print("=" * 60)
+            stage6 = PipelineStageRecord(stage_name="code_review")
+            t0 = datetime.now()
+            try:
+                contract_d = self._review_agent.review(contract_d, reviewer_name)
+                stage6.status = PipelineStageStatus.SUCCESS
+            except Exception as exc:  # noqa: BLE001
+                stage6.status = PipelineStageStatus.FAILED
+                stage6.errors.append(str(exc))
+                print(f"  ⚠️  Stage 6 falló: {exc}")
+            stage6.completed_at = datetime.now()
+            stage6.duration_seconds = (stage6.completed_at - t0).total_seconds()
+            stages.append(stage6)
+        else:
+            stages.append(PipelineStageRecord(
+                stage_name="code_review", status=PipelineStageStatus.SKIPPED,
+            ))
+
+        # Persistir Contract D si fue generado
+        contract_d_path = None
+        if contract_d is not None:
+            contract_d_path = output_dir / f"contract_d_{contract_d.pipeline_run_id}.json"
+            self._save_model(contract_d, contract_d_path)
+            print(f"\n  ✅ Contract D guardado: {contract_d_path.name}")
+
+        # ── Etapa 7: Construir Contract C + reporte HTML ──────────────────────
         print("\n" + "=" * 60)
-        print("📊 ETAPA 3: Generación de Reporte Ejecutivo")
+        print("📊 ETAPA 7: Generación de Reporte Ejecutivo")
         print("=" * 60)
         total_duration = (datetime.now() - pipeline_start).total_seconds()
         contract_c = self._build_contract_c(
@@ -139,6 +282,7 @@ class QualityPipeline:
             total_duration=total_duration,
             contract_a_path=str(contract_a_path),
             contract_b_path=str(contract_b_path),
+            contract_d=contract_d,
         )
         contract_c_path = output_dir / f"contract_c_{contract_c.pipeline_run_id}.json"
         self._save_model(contract_c, contract_c_path)
@@ -247,7 +391,12 @@ class QualityPipeline:
                                 scenario.quality_characteristic = QualityCharacteristic(new_iso)
                             except ValueError:
                                 pass
-            changes.append(ReviewChange(reviewer=reviewer_name, action=action, notes=notes))
+            changes.append(ReviewChange(
+                reviewer=reviewer_name,
+                action=action,
+                notes=notes,
+                scenario_name=dec.get("scenario_name") or None,
+            ))
 
         # Recalcular coverage_by_characteristic si hubo reclasificaciones
         if any(d.get("new_iso") for d in scenario_decisions):
@@ -480,6 +629,7 @@ class QualityPipeline:
         total_duration: float,
         contract_a_path: str,
         contract_b_path: str,
+        contract_d: "CodeGenerationResult | None" = None,
     ) -> ExecutiveReport:
         total_acs = sum(len(s.acceptance_criteria) for s in contract_a.user_stories)
         covered_acs = len([cm for cm in contract_b.coverage_matrix if cm.scenario_names])
@@ -558,6 +708,32 @@ class QualityPipeline:
             quality_insights=insights,
             requirements_to_test_coverage_ratio=coverage_ratio,
             iso_characteristics_with_zero_coverage=zero_coverage,
+            code_generation=self._build_code_generation_summary(contract_d),
+        )
+
+    def _build_code_generation_summary(
+        self,
+        contract_d: "CodeGenerationResult | None",
+    ) -> "CodeGenerationSummary | None":
+        """Construye el resumen de generación de código para el ExecutiveReport."""
+        if contract_d is None:
+            return None
+        qr = contract_d.quality_report
+        tm = contract_d.traceability_matrix
+        cr = contract_d.coverage_report
+        n_high = (
+            sum(1 for f in qr.security_findings if f.severity == SecuritySeverity.HIGH)
+            if qr else 0
+        )
+        return CodeGenerationSummary(
+            total_modules=contract_d.total_modules,
+            total_tests=contract_d.total_tests,
+            functions_exceeding_threshold=qr.functions_exceeding_threshold if qr else 0,
+            security_findings_high=n_high,
+            cmmi_l3_compliant=tm.cmmi_l3_compliant if tm else None,
+            branch_coverage_pct=cr.branch_coverage_pct if cr else None,
+            code_review_status=contract_d.review.review_status.value,
+            contract_d_run_id=contract_d.pipeline_run_id,
         )
 
     def _generate_insights(
@@ -726,7 +902,12 @@ class QualityPipeline:
             "changes_count": len(review.change_history),
             "actions_breakdown": actions_breakdown,
             "changes": [
-                {"action": ch.action, "notes": ch.notes or "", "timestamp": ch.timestamp.isoformat()}
+                {
+                    "action": ch.action,
+                    "notes": ch.notes or "",
+                    "scenario_name": ch.scenario_name or "",
+                    "timestamp": ch.timestamp.isoformat(),
+                }
                 for ch in review.change_history
             ],
             "ambiguities_resolved": [

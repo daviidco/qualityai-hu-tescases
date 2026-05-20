@@ -4,10 +4,11 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
-import project_store
+import mongo_store
+from dependencies import get_current_user
 from executive_pdf import generate_executive_pdf
 from schemas import (
     AnalyzeRequest, AnalyzeResponse, AmbiguityItem,
@@ -32,7 +33,11 @@ def _raise_http(exc: Exception) -> None:
 # ── Fase 1-a: Detectar ambigüedades ──────────────────────────────────────────
 
 @router.post("/pipeline/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
+async def analyze(
+    req: AnalyzeRequest,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+) -> AnalyzeResponse:
     """Detecta ambigüedades en el requerimiento. Crea sesión para los pasos siguientes."""
     try:
         raw = await run_in_threadpool(
@@ -60,7 +65,11 @@ async def analyze(req: AnalyzeRequest, request: Request) -> AnalyzeResponse:
 # ── Fase 1-b + 2: Generar HU y Test Cases ────────────────────────────────────
 
 @router.post("/pipeline/generate-tests", response_model=GenerateTestsResponse)
-async def generate_tests(req: GenerateTestsRequest, request: Request) -> GenerateTestsResponse:
+async def generate_tests(
+    req: GenerateTestsRequest,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+) -> GenerateTestsResponse:
     """Genera Contract A con las resoluciones del analista y luego Contract B (test cases)."""
     session = request.app.state.sessions.get(req.session_id)
     if not session:
@@ -135,7 +144,11 @@ async def generate_tests(req: GenerateTestsRequest, request: Request) -> Generat
 # ── Fase 3: Finalizar con decisiones del analista ─────────────────────────────
 
 @router.post("/pipeline/finalize", response_model=FinalizeResponse)
-async def finalize(req: FinalizeRequest, request: Request) -> FinalizeResponse:
+async def finalize(
+    req: FinalizeRequest,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+) -> FinalizeResponse:
     """Aplica decisiones de revisión a Contract B y genera el reporte HTML final."""
     session = request.app.state.sessions.get(req.session_id)
     if not session or not session.get("contract_a") or not session.get("contract_b"):
@@ -169,19 +182,28 @@ async def finalize(req: FinalizeRequest, request: Request) -> FinalizeResponse:
     run_id = result["pipeline_run_id"]
     req_preview = result["report_data"].get("original_requirement", "")[:200]
 
-    # Persist to disk for history
+    pipeline_data = {
+        "run_id":       run_id,
+        "timestamp":    summary_data.get("created_at", ""),
+        "req_preview":  req_preview,
+        "summary":      summary_data,
+        "report_data":  result["report_data"],
+        "html_content": result["html_content"],
+        "pdf_base64":   pdf_b64,
+    }
+
+    # Persist to MongoDB
     try:
-        project_store.save(run_id, {
-            "run_id":      run_id,
-            "timestamp":   summary_data.get("created_at", ""),
-            "req_preview": req_preview,
-            "summary":     summary_data,
-            "report_data": result["report_data"],
-            "html_content": result["html_content"],
-            "pdf_base64":  pdf_b64,
-        })
+        await mongo_store.save(run_id, pipeline_data)
     except Exception as store_exc:
-        logger.exception("Project store save failed: %s", store_exc)
+        logger.exception("MongoDB store save failed: %s", store_exc)
+
+    # Link pipeline result to the project draft (and specific requirement) if provided
+    if req.project_draft_id:
+        try:
+            await mongo_store.link_pipeline(req.project_draft_id, pipeline_data, req.req_id)
+        except Exception as link_exc:
+            logger.exception("link_pipeline failed for draft %s: %s", req.project_draft_id, link_exc)
 
     return FinalizeResponse(
         pipeline_run_id=run_id,
@@ -195,18 +217,18 @@ async def finalize(req: FinalizeRequest, request: Request) -> FinalizeResponse:
 # ── Historial de proyectos ────────────────────────────────────────────────────
 
 @router.get("/pipeline/projects", response_model=ProjectListResponse)
-async def list_projects() -> ProjectListResponse:
+async def list_projects(_user: dict = Depends(get_current_user)) -> ProjectListResponse:
     """Lista todos los proyectos almacenados, ordenados por fecha descendente."""
-    items = project_store.list_all()
+    items = await mongo_store.list_all()
     return ProjectListResponse(
         projects=[ProjectMeta(**p) for p in items]
     )
 
 
 @router.get("/pipeline/projects/{run_id}", response_model=ProjectDetailResponse)
-async def get_project(run_id: str) -> ProjectDetailResponse:
+async def get_project(run_id: str, _user: dict = Depends(get_current_user)) -> ProjectDetailResponse:
     """Retorna el reporte completo de un proyecto."""
-    data = project_store.get(run_id)
+    data = await mongo_store.get(run_id)
     if not data:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
     return ProjectDetailResponse(**data)

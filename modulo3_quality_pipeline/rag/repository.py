@@ -198,3 +198,73 @@ class KnowledgeRepository(IKnowledgeRepository):
         if chunks:
             self.add_chunks(chunks)
             print(f"  [KnowledgeRepository] {len(patterns)} patrones → {len(chunks)} chunks indexados")
+
+    def load_code_patterns_from_json(self, filepath: str) -> None:
+        """Indexa la KB Katary de patrones de código con 3 chunks por patrón.
+
+        Chunks:
+          - context: domain + katary_context + code_pattern_typical
+          - quality:  quality_practices + typical_functions
+          - lessons:  common_smells + lessons_learned_katary
+        """
+        path = Path(filepath)
+        if not path.exists():
+            print(f"  ⚠️  KB de patrones de código no encontrada ({filepath}). Stage 3 sin RAG.")
+            return
+
+        with open(path, encoding="utf-8") as f:
+            patterns = json.load(f)
+
+        chunks: list[dict[str, Any]] = []
+        for p in patterns:
+            pid = p["id"]
+            domain = p.get("domain", "general")
+
+            context_text = " ".join(filter(None, [
+                domain,
+                p.get("katary_context", ""),
+                p.get("code_pattern_typical", ""),
+            ]))
+            chunks.append({
+                "id": f"{pid}_context",
+                "text": context_text,
+                "metadata": {
+                    "source_id": pid,
+                    "chunk_type": "context",
+                    "domain": domain,
+                },
+            })
+
+            quality_text = " ".join([
+                *p.get("quality_practices", []),
+                *p.get("typical_functions", []),
+            ])
+            if quality_text.strip():
+                chunks.append({
+                    "id": f"{pid}_quality",
+                    "text": quality_text,
+                    "metadata": {
+                        "source_id": pid,
+                        "chunk_type": "quality",
+                        "domain": domain,
+                    },
+                })
+
+            lessons_text = " ".join(filter(None, [
+                "Smells comunes: " + " | ".join(p.get("common_smells", [])),
+                p.get("lessons_learned_katary", ""),
+            ]))
+            if lessons_text.strip():
+                chunks.append({
+                    "id": f"{pid}_lessons",
+                    "text": lessons_text,
+                    "metadata": {
+                        "source_id": pid,
+                        "chunk_type": "lessons",
+                        "domain": domain,
+                    },
+                })
+
+        if chunks:
+            self.add_chunks(chunks)
+            print(f"  [KnowledgeRepository] {len(patterns)} patrones Katary → {len(chunks)} chunks indexados")

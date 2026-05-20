@@ -5,41 +5,44 @@ import streamlit as st
 _CSS = """
 <style>
   /* ── Tamaño base global ── */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   html, body, [class*="css"] { font-size: 17px !important; }
+  body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   p, div, span, li, label { font-size: 1rem; }
 
   #MainMenu, footer { visibility: hidden; }
-  /* Header transparente: ocultar branding, conservar botones de sidebar */
+  /* Header: transparente y sin interceptar clics (para que el sidebar sea clickeable) */
   header[data-testid="stHeader"] {
     background: transparent !important;
     box-shadow: none !important;
+    pointer-events: none !important;
   }
   [data-testid="stToolbar"],
   [data-testid="stDecoration"],
-  [data-testid="stStatusWidget"] { display: none !important; }
-  /* Botones nativos ocultos — reemplazados por botón JS fijo */
+  [data-testid="stStatusWidget"],
+  [data-testid="stAppDeployButton"],
+  button[kind="header"],
+  .stDeployButton { display: none !important; }
+  /* ── Custom sidebar host ── */
+  /* Streamlit native sidebar: off-screen para ocultar visualmente pero clickeable via JS */
   [data-testid="collapsedControl"],
   [data-testid="stSidebarCollapseButton"] { display: none !important; }
-  .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
-
-  /* ── Sidebar ── */
-  [data-testid="stSidebar"] {
-    background: #0a0e16 !important;
-    border-right: 1px solid #1e2d3d;
+  section[data-testid="stSidebar"] {
+    position: fixed !important;
+    left: -9999px !important;
+    opacity: 0 !important;
+    z-index: -1 !important;
   }
-  [data-testid="stSidebar"] .stButton > button {
-    width: 100%; text-align: left; background: transparent; border: none;
-    padding: 0.55rem 0.75rem; border-radius: 6px;
-    color: #8b949e; font-size: 1.05rem; transition: background 0.15s;
+  /* Indent main content to clear our fixed custom sidebar (256 px expanded / 64 px mini) */
+  .block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 1rem;
+    padding-left: 280px !important;
+    transition: padding-left 0.25s ease;
   }
-  [data-testid="stSidebar"] .stButton > button:hover {
-    background: #161b22; color: #e2e8f0;
-  }
-  .agent-btn-active button {
-    background: #0e3a4a !important; color: #00bcd4 !important;
-    border-left: 3px solid #00bcd4 !important;
-    border-radius: 0 6px 6px 0 !important;
-  }
+  body.qa-mini .block-container { padding-left: 88px !important; }
+  /* Login page: no sidebar injected, no indent needed */
+  body:not(.qa-has-sb) .block-container { padding-left: 1.5rem !important; }
 
   /* ── Chat ── */
   [data-testid="stChatMessage"] {

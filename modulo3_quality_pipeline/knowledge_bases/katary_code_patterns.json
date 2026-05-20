@@ -1,0 +1,102 @@
+[
+  {
+    "id": "PTN-C-001",
+    "domain": "authentication",
+    "katary_context": "Katary implementa autenticación en la mayoría de sus sistemas web del SGC. El código de login es de los más auditados y atacados.",
+    "code_pattern_typical": "Funciones que validan credenciales, gestionan sesiones y aplican políticas de seguridad. Suelen tener varias ramas de decisión (usuario activo, credenciales válidas, intentos fallidos).",
+    "quality_practices": ["guard clauses para rechazos tempranos", "early returns en vez de anidamiento profundo", "type hints en toda firma pública", "nunca hardcodear secretos ni rutas de tokens"],
+    "typical_functions": ["validar_credenciales(usuario, password)", "verificar_intentos_fallidos(usuario)", "cerrar_sesion_por_inactividad(sesion)"],
+    "common_smells": ["anidamiento de 4+ niveles por validaciones encadenadas (CogC alto)", "contraseñas o tokens en texto plano (Bandit B105/B106)", "except genérico que oculta fallos de autenticación"],
+    "lessons_learned_katary": "El código de autenticación tiende a crecer en CogC porque cada nueva política de seguridad agrega un if anidado. La regla de Katary: cada validación es una guard clause con early return, nunca un if anidado. Esto mantiene CC bajo y CogC bajo simultáneamente."
+  },
+  {
+    "id": "PTN-C-002",
+    "domain": "form_validation",
+    "katary_context": "Casi todos los formularios de los productos Katary validan entrada del usuario antes de persistir. Es código repetitivo y propenso a duplicación.",
+    "code_pattern_typical": "Funciones que reciben datos crudos, aplican reglas de validación campo por campo, y retornan errores acumulados o un objeto validado.",
+    "quality_practices": ["una función de validación por regla, no un monolito", "retornar lista de errores en vez de lanzar en el primer fallo", "type hints con tipos de dominio", "tests parametrizados para cubrir cada regla"],
+    "typical_functions": ["validar_email(valor)", "validar_longitud(valor, minimo, maximo)", "validar_formulario(datos)"],
+    "common_smells": ["una sola función validar_todo() con CC > 15", "validaciones duplicadas entre formularios distintos", "mensajes de error hardcodeados sin centralizar"],
+    "lessons_learned_katary": "La validación de formularios es donde más se dispara la Complejidad Ciclomática si se hace en un solo método. Katary descompone: una función pequeña por regla (CC bajo cada una), y una orquestadora que las llama. Esto sube la testabilidad y baja el CC por función."
+  },
+  {
+    "id": "PTN-C-003",
+    "domain": "monetary_calculation",
+    "katary_context": "Los sistemas financieros de Katary (facturación, nómina, cobros) calculan montos, impuestos y descuentos. Es código de alto riesgo regulatorio.",
+    "code_pattern_typical": "Funciones puras que reciben montos y reglas, y retornan el resultado calculado. Suelen tener ramas por tipo de cliente, región, o régimen tributario.",
+    "quality_practices": ["funciones puras sin efectos secundarios", "usar Decimal, nunca float, para dinero", "constantes nombradas para tasas (IVA, retenciones)", "branch coverage del 90% por ser código crítico"],
+    "typical_functions": ["calcular_iva(subtotal)", "aplicar_descuento(monto, tipo_cliente)", "calcular_total_factura(items)"],
+    "common_smells": ["uso de float para montos (errores de redondeo)", "tasas mágicas hardcodeadas (0.19) sin nombre", "anidamiento por combinaciones de tipo_cliente x region"],
+    "lessons_learned_katary": "El cálculo monetario es código crítico: Katary exige branch coverage del 90%, no del 80%. Y el CC alto aquí suele ser complejidad ESENCIAL del dominio (las reglas tributarias son complejas) — se prefiere aplanar con early returns antes que esconder reglas en helpers."
+  },
+  {
+    "id": "PTN-C-004",
+    "domain": "data_persistence",
+    "katary_context": "Katary persiste datos en bases relacionales en todos sus productos. El código de acceso a datos es donde se concentran fugas de recursos y vulnerabilidades de inyección.",
+    "code_pattern_typical": "Funciones que abren conexiones, ejecutan queries parametrizadas y cierran recursos. Patrón repositorio: una clase o módulo por entidad.",
+    "quality_practices": ["queries siempre parametrizadas, nunca concatenadas", "context managers (with) para cerrar recursos", "separar lógica de negocio del acceso a datos", "no atrapar excepciones de DB con except genérico"],
+    "typical_functions": ["guardar_entidad(entidad)", "buscar_por_id(id)", "listar_con_filtro(criterio)"],
+    "common_smells": ["SQL construido por concatenación de strings (Bandit B608, inyección)", "conexiones que no se cierran (fuga de recursos)", "lógica de negocio mezclada con queries"],
+    "lessons_learned_katary": "El acceso a datos es donde Bandit encuentra más hallazgos en los proyectos Katary: inyección SQL por concatenación. La regla: toda query parametrizada, sin excepción. Y todo recurso abierto dentro de un context manager — el código de persistencia con fugas pasa el análisis de complejidad pero falla el de seguridad."
+  },
+  {
+    "id": "PTN-C-005",
+    "domain": "api_endpoint",
+    "katary_context": "Los productos Katary exponen APIs REST. El código de los endpoints es el punto de entrada y debe validar, orquestar y responder con contratos claros.",
+    "code_pattern_typical": "Funciones handler que reciben request, validan, delegan a la capa de negocio, y construyen response. Deben ser delgadas — la lógica vive en otra capa.",
+    "quality_practices": ["handlers delgados: validar, delegar, responder", "validación de entrada con Pydantic", "códigos de estado HTTP correctos por rama", "no meter lógica de negocio en el handler"],
+    "typical_functions": ["handle_crear_recurso(request)", "handle_obtener_recurso(request, id)", "construir_respuesta_error(codigo, mensaje)"],
+    "common_smells": ["handlers gordos con CC > 10 (validación + negocio + persistencia mezclados)", "todos los errores devuelven 500", "lógica duplicada entre endpoints"],
+    "lessons_learned_katary": "Los handlers de API que crecen en CC son señal de que la lógica de negocio se está filtrando a la capa de transporte. La regla Katary: el handler valida, delega y responde — si el handler tiene CC > 6, hay lógica que debe bajar a la capa de servicio."
+  },
+  {
+    "id": "PTN-C-006",
+    "domain": "file_processing",
+    "katary_context": "Katary procesa archivos cargados por usuarios (CSV, Excel, PDF) en varios de sus productos. Es código propenso a errores de formato y a fugas de recursos.",
+    "code_pattern_typical": "Funciones que abren archivos, iteran su contenido, transforman y producen un resultado estructurado. Deben manejar archivos malformados sin caerse.",
+    "quality_practices": ["context managers para abrir y cerrar archivos", "validar el formato antes de procesar", "manejar filas malformadas sin abortar todo el lote", "tests con archivos de borde (vacío, una fila, formato inválido)"],
+    "typical_functions": ["procesar_csv(ruta)", "validar_estructura_archivo(archivo)", "transformar_fila(fila)"],
+    "common_smells": ["archivos que no se cierran (fuga de recursos)", "un solo try gigante que oculta dónde falló", "asumir que el archivo siempre está bien formado"],
+    "lessons_learned_katary": "El procesamiento de archivos falla en producción por casos de borde que no se testearon: archivo vacío, una sola fila, encoding distinto. Katary exige que la práctica de tests incluya siempre esos tres casos de borde — el branch coverage lo hace visible."
+  },
+  {
+    "id": "PTN-C-007",
+    "domain": "notification_sending",
+    "katary_context": "Los sistemas Katary envían notificaciones (email, SMS, push). Es código que depende de servicios externos y debe ser resiliente a fallos de red.",
+    "code_pattern_typical": "Funciones que construyen el mensaje, llaman a un servicio externo, y manejan el resultado. Deben tolerar fallos del servicio sin tumbar el flujo principal.",
+    "quality_practices": ["separar construcción del mensaje del envío", "manejar el fallo del servicio externo explícitamente (no except genérico)", "no bloquear el flujo principal si la notificación falla", "registrar el intento para trazabilidad"],
+    "typical_functions": ["construir_mensaje(plantilla, datos)", "enviar_notificacion(destinatario, mensaje)", "registrar_intento_envio(resultado)"],
+    "common_smells": ["except genérico que silencia fallos de envío (Bandit B110)", "lógica de construcción del mensaje mezclada con la del envío", "el fallo de notificación tumba la transacción de negocio"],
+    "lessons_learned_katary": "Las notificaciones dependen de servicios externos que fallan. La lección de Katary: el fallo de una notificación NUNCA debe tumbar la transacción de negocio. Se maneja explícitamente, se registra, y el flujo continúa. El except genérico aquí es un smell de Reliability."
+  },
+  {
+    "id": "PTN-C-008",
+    "domain": "search_filtering",
+    "katary_context": "Los productos Katary ofrecen búsqueda y filtrado de registros. Es código que combina criterios y tiende a crecer en complejidad por la cantidad de filtros.",
+    "code_pattern_typical": "Funciones que reciben criterios de búsqueda, los combinan, y retornan resultados filtrados. La complejidad crece con cada filtro nuevo.",
+    "quality_practices": ["un predicado por filtro, componibles", "evitar el if anidado por combinación de filtros", "criterios opcionales con valores por defecto claros", "tests por cada filtro y por combinaciones"],
+    "typical_functions": ["filtrar_por_fecha(registros, desde, hasta)", "filtrar_por_estado(registros, estado)", "buscar(criterios)"],
+    "common_smells": ["una función buscar() con CC > 15 por if anidado de filtros", "filtros que se repiten copiados en varios módulos", "criterios sin valor por defecto que obligan a pasar None"],
+    "lessons_learned_katary": "La búsqueda con múltiples filtros es donde el CC explota si se hace con if anidados. Katary usa predicados componibles: cada filtro es una función pequeña (CC bajo), y la búsqueda los compone. Esto mantiene cada pieza testeable y el CC controlado."
+  },
+  {
+    "id": "PTN-C-009",
+    "domain": "report_generation",
+    "katary_context": "Katary genera reportes agregados (ventas, nómina, indicadores) en sus sistemas. Es código que agrega datos y debe ser correcto y razonablemente rápido.",
+    "code_pattern_typical": "Funciones que toman un conjunto de datos, los agregan según una dimensión, y producen una estructura de reporte. Suelen tener bucles y agregaciones.",
+    "quality_practices": ["separar la agregación de la presentación", "funciones puras para los cálculos de agregación", "nombres de variables que reflejen la dimensión agregada", "tests con datasets de borde (vacío, un registro)"],
+    "typical_functions": ["agrupar_por_mes(registros)", "calcular_totales(grupo)", "generar_reporte(datos, dimension)"],
+    "common_smells": ["agregación y formato de salida en la misma función", "bucles anidados que disparan CogC", "nombres genéricos (data, result, temp) que ocultan qué se agrega"],
+    "lessons_learned_katary": "Los reportes mezclan a menudo el cálculo con el formato de salida, lo que dispara la complejidad. Katary separa: funciones puras para agregar (testeables, CC bajo) y una capa aparte para formatear. El naming es clave aquí — 'data' no dice nada, 'ventas_por_mes' sí."
+  },
+  {
+    "id": "PTN-C-010",
+    "domain": "state_machine",
+    "katary_context": "Varios procesos de negocio en Katary son máquinas de estado (pedidos, solicitudes, tickets que pasan por estados definidos). Es código con muchas transiciones.",
+    "code_pattern_typical": "Funciones que reciben un estado actual y un evento, y deciden el estado siguiente. La lógica de transición tiende a tener muchas ramas.",
+    "quality_practices": ["transiciones explícitas en una tabla o diccionario, no en if anidados", "validar transiciones inválidas explícitamente", "un estado y un evento son tipos de dominio, no strings sueltos", "tests por cada transición válida e inválida"],
+    "typical_functions": ["transicionar(estado_actual, evento)", "es_transicion_valida(desde, hacia)", "estados_alcanzables(estado)"],
+    "common_smells": ["if/elif anidado gigante para las transiciones (CC y CogC altísimos)", "estados como strings mágicos sin enum", "transiciones inválidas que pasan silenciosamente"],
+    "lessons_learned_katary": "Las máquinas de estado implementadas con if/elif anidados son el caso clásico de CC alto que ESCONDE complejidad esencial. Katary las modela con una tabla de transiciones (diccionario): el CC baja drásticamente y las transiciones quedan explícitas y auditables. Es el ejemplo perfecto de que refactorizar baja CogC sin perder la lógica del dominio."
+  }
+]

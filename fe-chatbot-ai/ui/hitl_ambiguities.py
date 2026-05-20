@@ -15,7 +15,7 @@ def render_ambiguity_review(on_submit) -> None:
     req_preview = st.session_state.hitl_requirement[:120]
 
     st.markdown(
-        '<h3 style="color:#e2e8f0;margin-bottom:0.25rem;">🔍 Revisión de Ambigüedades</h3>',
+        '<h3 style="color:#e2e8f0;margin-bottom:0.25rem;">Revisión de Ambigüedades</h3>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -28,7 +28,6 @@ def render_ambiguity_review(on_submit) -> None:
         f"Se detectaron **{len(ambiguities)} término(s) ambiguo(s)** según IEEE 830 / ISO 25010. "
         "Revisa cada uno y proporciona tu resolución antes de continuar. "
         "Tus resoluciones se inyectan como **hechos verificados** en el prompt del LLM.",
-        icon="⚠️",
     )
 
     resolutions_state: dict = {}

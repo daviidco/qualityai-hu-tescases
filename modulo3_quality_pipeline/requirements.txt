@@ -28,5 +28,11 @@ python-dotenv>=1.0.0
 rich>=13.0.0
 json-repair>=0.29.0
 
+# Análisis estático (Stages 4-5)
+radon>=6.0.1
+complexipy>=0.3.0
+bandit>=1.7.8
+pytest-cov>=5.0.0
+
 # Nota: torch se instala automáticamente como dependencia de sentence-transformers
 # Si hay conflicto de NumPy: pip install "numpy<2" antes de sentence-transformers

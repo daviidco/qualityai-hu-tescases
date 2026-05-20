@@ -83,6 +83,7 @@ class ReviewChange(BaseModel):
     reviewer: str
     action: str
     notes: Optional[str] = None
+    scenario_name: Optional[str] = None
 
 
 class ReviewMetadata(BaseModel):

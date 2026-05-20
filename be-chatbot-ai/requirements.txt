@@ -1,9 +1,15 @@
 fastapi>=0.110.0
+python-multipart>=0.0.9
 fpdf2>=2.7.0
 uvicorn[standard]>=0.27.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
+motor[asyncio]>=3.4.0
+pymongo>=4.7.0
+python-jose[cryptography]>=3.3.0
+email-validator>=2.1.0
+jira>=3.8.0
 
 # Dependencias de modulo3_quality_pipeline (compartidas via sys.path)
 google-genai>=2.0.0

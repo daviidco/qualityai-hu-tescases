@@ -33,6 +33,8 @@ class Settings(BaseSettings):
 
     stories_kb_path: str = str(_MODULE_DIR / "knowledge_bases" / "stories_kb.json")
     patterns_kb_path: str = str(_MODULE_DIR / "knowledge_bases" / "patterns_kb.json")
+    code_patterns_kb_path: str = str(_MODULE_DIR / "knowledge_bases" / "katary_code_patterns.json")
+    code_patterns_collection_name: str = "m3_code_patterns_chunked"
 
     rag_bm25_top_k: int = 20
     rag_dense_top_k: int = 20

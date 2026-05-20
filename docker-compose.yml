@@ -9,6 +9,26 @@ version: "3.9"
 
 services:
 
+  # ── MongoDB ───────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: qualityai_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-changeme}
+      MONGO_INITDB_DATABASE: qualityai
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   # ── Backend: FastAPI + Módulo 3 pipeline ─────────────────────────────────
   backend:
     build:
@@ -25,8 +45,11 @@ services:
       - chroma_data:/app/modulo3_quality_pipeline/chroma_db_m3
       # Output: artefactos JSON + HTML generados por el pipeline
       - pipeline_output:/app/modulo3_quality_pipeline/output
-      # Historial de proyectos (reportes finales persistidos)
-      - projects_data:/app/storage
+      # Logos y archivos de proyecto
+      - project_assets:/app/storage
+    depends_on:
+      mongodb:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -53,9 +76,11 @@ services:
 
 # ── Volúmenes nombrados ───────────────────────────────────────────────────────
 volumes:
+  mongo_data:
+    driver: local
   chroma_data:
     driver: local
   pipeline_output:
     driver: local
-  projects_data:
+  project_assets:
     driver: local

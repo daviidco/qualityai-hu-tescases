@@ -379,22 +379,26 @@ class HtmlReporter(IReportGenerator):
             for k, v in actions_count.items()
         )
 
-        # Tabla de decisiones por escenario
+        # Tabla de decisiones por escenario (solo comentados y reclasificados)
         rows_html = ""
         if review.change_history:
-            rows = []
-            for ch in review.change_history:
-                a_label, a_color, a_bg = _ACTION_META.get(ch.action, (ch.action, "#6b7280", "#f1f5f9"))
-                notes = ch.notes or "—"
-                rows.append(f"""<tr>
+            notable = [ch for ch in review.change_history if ch.action in ("commented", "reclassified")]
+            if notable:
+                rows = []
+                for ch in notable:
+                    a_label, a_color, a_bg = _ACTION_META.get(ch.action, (ch.action, "#6b7280", "#f1f5f9"))
+                    notes = ch.notes or "—"
+                    scenario_cell = f'<span style="font-size:.8rem;color:#64748b">{ch.scenario_name}</span>' if ch.scenario_name else "—"
+                    rows.append(f"""<tr>
+  <td>{scenario_cell}</td>
   <td><span class="action-badge" style="background:{a_bg};color:{a_color}">{a_label}</span></td>
   <td class="notes-cell">{notes}</td>
   <td class="ts-cell">{ch.timestamp.strftime("%H:%M")}</td>
 </tr>""")
-            rows_html = f"""<h3 class="sub-h" style="margin-top:1.25rem">Detalle de decisiones por escenario</h3>
+                rows_html = f"""<h3 class="sub-h" style="margin-top:1.25rem">Comentarios y reclasificaciones por escenario</h3>
 <div class="table-wrap">
 <table class="review-table">
-  <thead><tr><th>Acción</th><th>Notas</th><th>Hora</th></tr></thead>
+  <thead><tr><th>Escenario</th><th>Acción</th><th>Nota</th><th>Hora</th></tr></thead>
   <tbody>{"".join(rows)}</tbody>
 </table>
 </div>"""

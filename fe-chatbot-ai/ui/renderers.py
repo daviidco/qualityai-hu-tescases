@@ -63,18 +63,18 @@ def render_contract_a(data: dict) -> str:
         if acs:
             html += '<div style="font-size:0.78rem;color:#8b949e;margin-bottom:0.4rem;">CRITERIOS DE ACEPTACIÓN</div>'
             for ac in acs:
-                icon = (
-                    '<span class="ac-neg">✕</span>'
+                ac_icon = (
+                    '<span class="ac-neg">neg</span>'
                     if ac.get("is_negative_case")
-                    else '<span class="ac-check">✓</span>'
+                    else '<span class="ac-check">ok</span>'
                 )
-                html += f'<div class="ac-item">{icon}<span>{ac.get("description", "")}</span></div>'
+                html += f'<div class="ac-item">{ac_icon}<span>{ac.get("description", "")}</span></div>'
 
         ambs = story.get("ambiguities_resolved", [])
         if ambs:
             html += '<div style="margin-top:0.6rem;">'
             for a in ambs:
-                tag = " ⚠" if a.get("assumption_made") else " ✓"
+                tag = " [LLM]" if a.get("assumption_made") else " [OK]"
                 html += f'<span class="amb-tag">{a.get("original_text", "")}{tag}</span>'
             html += "</div>"
 

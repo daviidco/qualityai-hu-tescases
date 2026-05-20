@@ -37,7 +37,7 @@ def _render_reference_panel() -> None:
     requirement: str = st.session_state.get("hitl_requirement", "")
     user_stories: list[dict] = st.session_state.get("hitl_user_stories", [])
 
-    with st.expander("📋  Referencia — Requerimiento e Historias de Usuario", expanded=False):
+    with st.expander("Referencia — Requerimiento e Historias de Usuario", expanded=False):
         if requirement:
             st.markdown(
                 '<div style="font-size:.92rem;text-transform:uppercase;letter-spacing:.06em;'
@@ -122,7 +122,7 @@ def render_test_review(on_submit) -> None:
     decisions: dict = st.session_state.hitl_scenario_decisions
 
     st.markdown(
-        '<h3 style="color:#e2e8f0;margin-bottom:0.25rem;">🧪 Revisión de Test Cases</h3>',
+        '<h3 style="color:#e2e8f0;margin-bottom:0.25rem;">Revisión de Test Cases</h3>',
         unsafe_allow_html=True,
     )
     reviewed = sum(1 for d in decisions.values() if d.get("action") != "skipped")
@@ -137,7 +137,7 @@ def render_test_review(on_submit) -> None:
     # ── Escenarios por feature ────────────────────────────────────────────────
     for feature in features:
         fid = feature["user_story_id"]
-        with st.expander(f"📋 {fid} — {feature['name']}  ({len(feature['scenarios'])} escenarios)", expanded=True):
+        with st.expander(f"{fid} — {feature['name']}  ({len(feature['scenarios'])} escenarios)", expanded=True):
             st.markdown(
                 f'<div style="font-size:1rem;color:#64748b;font-style:italic;margin-bottom:.75rem;">'
                 f'{feature["description"]}</div>',
@@ -163,9 +163,9 @@ def render_test_review(on_submit) -> None:
             "Decisión",
             options=["approved", "needs_changes", "rejected"],
             format_func=lambda x: {
-                "approved": "✅ Aprobar suite",
-                "needs_changes": "⚠️ Aprobar con observaciones",
-                "rejected": "❌ Rechazar — requiere regeneración",
+                "approved": "Aprobar suite",
+                "needs_changes": "Aprobar con observaciones",
+                "rejected": "Rechazar — requiere regeneración",
             }[x],
             key="hitl_global_decision",
         )
@@ -247,10 +247,10 @@ def _render_scenario(feature_id: str, sc: dict, decisions: dict, idx: int) -> No
                 "Acción",
                 options=["accepted", "reclassified", "commented", "skipped"],
                 format_func=lambda x: {
-                    "accepted": "✓ Aceptar",
-                    "reclassified": "↺ Reclasificar ISO",
-                    "commented": "💬 Comentar",
-                    "skipped": "→ Saltar",
+                    "accepted": "Aceptar",
+                    "reclassified": "Reclasificar ISO",
+                    "commented": "Comentar",
+                    "skipped": "Saltar",
                 }[x],
                 index=["accepted", "reclassified", "commented", "skipped"].index(current_action),
                 key=f"action_{wkey}",

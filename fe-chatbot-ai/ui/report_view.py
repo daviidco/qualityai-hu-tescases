@@ -114,7 +114,7 @@ def render_report_native(report_data: dict, html_content: str | None = None,
     eco_badge = (
         '<span style="background:#065f46;color:#6ee7b7;border:1px solid #34d399;'
         'border-radius:20px;padding:.15rem .7rem;font-size:.9rem;font-weight:700;'
-        'margin-left:.6rem;vertical-align:middle;">⚡ ECO</span>'
+        'margin-left:.6rem;vertical-align:middle;">ECO</span>'
         if is_eco else ""
     )
 
@@ -141,7 +141,7 @@ def render_report_native(report_data: dict, html_content: str | None = None,
         try:
             pdf_bytes = base64.b64decode(pdf_base64)
             st.download_button(
-                label="⬇  Descargar Reporte PDF",
+                label="Descargar Reporte PDF",
                 data=pdf_bytes,
                 file_name=f"reporte_ejecutivo_{run_id_short}.pdf",
                 mime="application/pdf",
@@ -149,12 +149,12 @@ def render_report_native(report_data: dict, html_content: str | None = None,
             )
         except Exception:
             st.markdown(
-                '<span style="color:#94a3b8;font-size:1rem;">⚠ PDF no disponible para este reporte.</span>',
+                '<span style="color:#94a3b8;font-size:1rem;">PDF no disponible para este reporte.</span>',
                 unsafe_allow_html=True,
             )
     else:
         st.markdown(
-            '<span style="color:#94a3b8;font-size:1rem;">⚠ PDF no disponible para este reporte.</span>',
+            '<span style="color:#94a3b8;font-size:1rem;">PDF no disponible para este reporte.</span>',
             unsafe_allow_html=True,
         )
 
@@ -203,7 +203,6 @@ def render_report_native(report_data: dict, html_content: str | None = None,
     _section_header("02", "Ambigüedades Detectadas")
     if not ambiguities:
         _card(
-            f'<span style="color:#16a34a;margin-right:.4rem;">✓</span>'
             f'<span style="color:{_C_MUTED};font-size:1.25rem;">No se detectaron ambigüedades.</span>',
             border_left="#16a34a",
         )
@@ -225,7 +224,6 @@ def render_report_native(report_data: dict, html_content: str | None = None,
         )
         if assumed:
             _card(
-                f'<span style="color:#d97706;margin-right:.35rem;">⚠</span>'
                 f'<strong style="color:#92400e;">{len(assumed)} supuesto(s) del LLM</strong>'
                 f'<span style="color:{_C_MUTED};font-size:1.1rem;"> — validar con el cliente '
                 f'antes de comenzar el desarrollo.</span>',
@@ -237,7 +235,7 @@ def render_report_native(report_data: dict, html_content: str | None = None,
                 "background:#451a03;color:#fbbf24;" if is_assumed
                 else "background:#052e16;color:#4ade80;"
             )
-            badge_text = "⚠ Supuesto LLM" if is_assumed else "✓ Analista"
+            badge_text = "Supuesto LLM" if is_assumed else "Analista"
             conf = (
                 f' <span style="font-size:1rem;color:{_C_MUTED};">'
                 f'({int(amb.get("confidence_score", 1) * 100)}%)</span>'
@@ -437,7 +435,6 @@ def render_report_native(report_data: dict, html_content: str | None = None,
 
     if hitl.get("analyst_feedback"):
         _card(
-            f'<span style="color:{_C_BLUE};margin-right:.35rem;">💬</span>'
             f'<strong style="color:{_C_NAVY};">Feedback del revisor:</strong> '
             f'<span style="color:{_C_MUTED};font-size:1.15rem;">{hitl["analyst_feedback"]}</span>',
             border_left=_C_BLUE,
@@ -458,11 +455,11 @@ def render_report_native(report_data: dict, html_content: str | None = None,
     if amb_resolved:
         _llm_badge = (
             '<span style="background:#451a03;color:#fbbf24;border-radius:20px;'
-            'padding:.08rem .45rem;font-size:1rem;font-weight:600;">⚠ LLM</span>'
+            'padding:.08rem .45rem;font-size:1rem;font-weight:600;">LLM</span>'
         )
         _ana_badge = (
             '<span style="background:#052e16;color:#4ade80;border-radius:20px;'
-            'padding:.08rem .45rem;font-size:1rem;font-weight:600;">✓ Analista</span>'
+            'padding:.08rem .45rem;font-size:1rem;font-weight:600;">Analista</span>'
         )
         rows_parts = []
         for r in amb_resolved:
@@ -510,7 +507,6 @@ def render_report_native(report_data: dict, html_content: str | None = None,
     if gaps:
         gap_names = ", ".join(_ISO_LABELS.get(g, g) for g in gaps)
         _card(
-            f'<span style="color:#d97706;margin-right:.35rem;">⚠</span>'
             f'<strong style="color:#92400e;">Sin cobertura:</strong> '
             f'<span style="color:{_C_MUTED};font-size:1.1rem;">{gap_names}</span>',
             border_left="#d97706",
@@ -592,7 +588,6 @@ def render_report_native(report_data: dict, html_content: str | None = None,
             for c in uncovered
         )
         _card(
-            f'<span style="color:#d97706;margin-right:.35rem;">⚠</span>'
             f'<strong style="color:#92400e;">Criterios sin cobertura de test:</strong> {items_html}',
             border_left="#d97706",
         )
@@ -605,11 +600,15 @@ def render_report_native(report_data: dict, html_content: str | None = None,
         )
         for ins in quality_insights:
             if ins.get("severity") == "critical":
-                icon, i_color, i_bg = "🔴", "#dc2626", "#2d0a0a"
+                i_color, i_bg = "#dc2626", "#2d0a0a"
             elif ins.get("severity") == "warning":
-                icon, i_color, i_bg = "🟡", "#d97706", "#2d1a03"
+                i_color, i_bg = "#d97706", "#2d1a03"
             else:
-                icon, i_color, i_bg = "🔵", "#3b82f6", "#0d1a2d"
+                i_color, i_bg = "#3b82f6", "#0d1a2d"
+            i_dot = (
+                f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+                f'background:{i_color};margin-right:6px;vertical-align:middle;"></span>'
+            )
             affected_html = ""
             if ins.get("affected_items"):
                 items_h = " ".join(
@@ -623,11 +622,11 @@ def render_report_native(report_data: dict, html_content: str | None = None,
                 )
             _card(
                 f'<div style="font-weight:700;font-size:1.3rem;color:{_C_TEXT};margin-bottom:.3rem;">'
-                f'{icon} {ins.get("title","")}</div>'
+                f'{i_dot}{ins.get("title","")}</div>'
                 f'<div style="font-size:1.1rem;color:{_C_MUTED};margin-bottom:.35rem;">'
                 f'{ins.get("description","")}</div>'
                 f'<div style="font-size:1.1rem;">'
-                f'<strong style="color:{_C_BLUE};">💡 Recomendación:</strong> '
+                f'<strong style="color:{_C_BLUE};">Recomendación:</strong> '
                 f'<span style="color:{_C_TEXT};">{ins.get("recommendation","")}</span></div>'
                 f'{affected_html}',
                 border_left=i_color,

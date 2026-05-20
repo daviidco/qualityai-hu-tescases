@@ -77,6 +77,18 @@ class QualityInsight(BaseModel):
     affected_items: list[str] = Field(default_factory=list)
 
 
+class CodeGenerationSummary(BaseModel):
+    """Resumen del pipeline de generación de código para el ExecutiveReport."""
+    total_modules: int = 0
+    total_tests: int = 0
+    functions_exceeding_threshold: int = 0
+    security_findings_high: int = 0
+    cmmi_l3_compliant: Optional[bool] = None
+    branch_coverage_pct: Optional[float] = None
+    code_review_status: str = "pending_review"
+    contract_d_run_id: Optional[str] = None
+
+
 class ExecutiveReport(BaseModel):
     """Contract C: Reporte ejecutivo combinado producido por el Orquestador.
 
@@ -115,3 +127,6 @@ class ExecutiveReport(BaseModel):
         description="Fracción de ACs con al menos un escenario de test",
     )
     iso_characteristics_with_zero_coverage: list[str] = Field(default_factory=list)
+
+    # Resumen del pipeline de generación de código (Stages 3-6, opcional)
+    code_generation: Optional[CodeGenerationSummary] = None

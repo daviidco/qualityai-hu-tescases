@@ -23,16 +23,16 @@ def _build_retrievers(settings, embedder, query_expander):
         rrf_k=settings.rag_rrf_k,
     )
 
-    stories_repo = KnowledgeRepository(
-        persist_dir=settings.chroma_persist_dir,
-        collection_name=settings.stories_collection_name,
-        embedder=embedder,
-    )
-    patterns_repo = KnowledgeRepository(
-        persist_dir=settings.chroma_persist_dir,
-        collection_name=settings.patterns_collection_name,
-        embedder=embedder,
-    )
+    def _repo(collection_name: str) -> "KnowledgeRepository":
+        return KnowledgeRepository(
+            persist_dir=settings.chroma_persist_dir,
+            collection_name=collection_name,
+            embedder=embedder,
+        )
+
+    stories_repo = _repo(settings.stories_collection_name)
+    patterns_repo = _repo(settings.patterns_collection_name)
+    code_patterns_repo = _repo(settings.code_patterns_collection_name)
 
     if stories_repo.count() == 0:
         print(f"  📚 Indexando KB de historias desde {settings.stories_kb_path}...")
@@ -46,9 +46,16 @@ def _build_retrievers(settings, embedder, query_expander):
     else:
         print(f"  ✅ KB patrones: {patterns_repo.count()} chunks ya indexados")
 
+    if code_patterns_repo.count() == 0:
+        print(f"  📚 Indexando KB Katary de código desde {settings.code_patterns_kb_path}...")
+        code_patterns_repo.load_code_patterns_from_json(settings.code_patterns_kb_path)
+    else:
+        print(f"  ✅ KB código Katary: {code_patterns_repo.count()} chunks ya indexados")
+
     return (
         HybridRetriever(repository=stories_repo, **retriever_kwargs),
         HybridRetriever(repository=patterns_repo, **retriever_kwargs),
+        HybridRetriever(repository=code_patterns_repo, **retriever_kwargs),
     )
 
 
@@ -60,6 +67,10 @@ def build_pipeline(settings):
     from .rag.reranker import CrossEncoderReranker
     from .agents.requirements_agent import RequirementsAgent
     from .agents.test_architect_agent import TestArchitectAgent
+    from .agents.code_generator_agent import CodeGeneratorAgent
+    from .agents.static_analysis_agent import StaticAnalysisAgent
+    from .agents.traceability_agent import TraceabilityAgent
+    from .agents.code_review_agent import CodeReviewAgent
     from .reporting.html_reporter import HtmlReporter
     from .pipeline import QualityPipeline
 
@@ -78,16 +89,28 @@ def build_pipeline(settings):
     print(f"  ✅ Embedder: {settings.gemini_embedding_model} ({embedder.dimension}-dim)")
 
     query_expander = HyDEQueryExpander(llm)
-    stories_retriever, patterns_retriever = _build_retrievers(settings, embedder, query_expander)
+    stories_retriever, patterns_retriever, code_retriever = _build_retrievers(
+        settings, embedder, query_expander
+    )
 
     reranker = CrossEncoderReranker(model_name=settings.reranker_model)
     print(f"  ✅ Reranker: {settings.reranker_model}")
 
     return QualityPipeline(
-        requirements_agent=RequirementsAgent(llm=llm, retriever=stories_retriever, reranker=reranker, settings=settings),
-        test_agent=TestArchitectAgent(llm=llm, retriever=patterns_retriever, reranker=reranker, settings=settings),
+        requirements_agent=RequirementsAgent(
+            llm=llm, retriever=stories_retriever, reranker=reranker, settings=settings
+        ),
+        test_agent=TestArchitectAgent(
+            llm=llm, retriever=patterns_retriever, reranker=reranker, settings=settings
+        ),
         reporter=HtmlReporter(),
         settings=settings,
+        code_agent=CodeGeneratorAgent(
+            llm=llm, retriever=code_retriever, reranker=reranker, settings=settings
+        ),
+        static_agent=StaticAnalysisAgent(),
+        traceability_agent=TraceabilityAgent(),
+        review_agent=CodeReviewAgent(),
     )
 
 
