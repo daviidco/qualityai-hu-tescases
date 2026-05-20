@@ -36,19 +36,31 @@ def _build_retrievers(settings, embedder, query_expander):
 
     if stories_repo.count() == 0:
         print(f"  📚 Indexando KB de historias desde {settings.stories_kb_path}...")
-        stories_repo.load_stories_from_json(settings.stories_kb_path)
+        try:
+            stories_repo.load_stories_from_json(settings.stories_kb_path)
+        except Exception as exc:
+            print(f"  ⚠️  No se pudo indexar KB de historias: {exc}")
+            print(f"     Se reintentará en el próximo reinicio.")
     else:
         print(f"  ✅ KB historias: {stories_repo.count()} chunks ya indexados")
 
     if patterns_repo.count() == 0:
         print(f"  📚 Indexando KB de patrones desde {settings.patterns_kb_path}...")
-        patterns_repo.load_patterns_from_json(settings.patterns_kb_path)
+        try:
+            patterns_repo.load_patterns_from_json(settings.patterns_kb_path)
+        except Exception as exc:
+            print(f"  ⚠️  No se pudo indexar KB de patrones: {exc}")
+            print(f"     Se reintentará en el próximo reinicio.")
     else:
         print(f"  ✅ KB patrones: {patterns_repo.count()} chunks ya indexados")
 
     if code_patterns_repo.count() == 0:
         print(f"  📚 Indexando KB Katary de código desde {settings.code_patterns_kb_path}...")
-        code_patterns_repo.load_code_patterns_from_json(settings.code_patterns_kb_path)
+        try:
+            code_patterns_repo.load_code_patterns_from_json(settings.code_patterns_kb_path)
+        except Exception as exc:
+            print(f"  ⚠️  No se pudo indexar KB de código: {exc}")
+            print(f"     Se reintentará en el próximo reinicio.")
     else:
         print(f"  ✅ KB código Katary: {code_patterns_repo.count()} chunks ya indexados")
 
