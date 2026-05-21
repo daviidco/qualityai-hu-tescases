@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from db import get_db
 from dependencies import require_admin
-from schemas import LLMConfigV2Out, LLMConfigV2Update, LLMKeyPreview, LLMProviderV2Out
+from schemas import EcoModeConfig, LLMConfigV2Out, LLMConfigV2Update, LLMKeyPreview, LLMProviderV2Out
 
 router = APIRouter(tags=["Admin"])
 
@@ -228,3 +228,33 @@ def apply_llm_config_to_pipeline(pipeline: object, doc: dict) -> None:
 
 def _swap_pipeline(request: Request, doc: dict) -> None:
     apply_llm_config_to_pipeline(request.app.state.pipeline, doc)
+
+
+# ── Eco Mode ──────────────────────────────────────────────────────────────────
+
+_ECO_COLLECTION = "eco_config"
+_ECO_DOC_ID = "eco_config"
+
+
+@router.get("/admin/eco-config", response_model=EcoModeConfig)
+async def get_eco_config(_admin: dict = Depends(require_admin)) -> EcoModeConfig:
+    db = get_db()
+    doc = await db[_ECO_COLLECTION].find_one({"_id": _ECO_DOC_ID}) or {}
+    return EcoModeConfig(eco_mode=doc.get("eco_mode", False))
+
+
+@router.patch("/admin/eco-config", response_model=EcoModeConfig)
+async def update_eco_config(
+    req: EcoModeConfig,
+    request: Request,
+    _admin: dict = Depends(require_admin),
+) -> EcoModeConfig:
+    db = get_db()
+    doc = {"_id": _ECO_DOC_ID, "eco_mode": req.eco_mode}
+    await db[_ECO_COLLECTION].replace_one({"_id": _ECO_DOC_ID}, doc, upsert=True)
+    os.environ["ECO_MODE"] = "true" if req.eco_mode else "false"
+
+    if hasattr(request.app.state, "pipeline"):
+        request.app.state.pipeline.set_eco_mode(req.eco_mode)
+
+    return EcoModeConfig(eco_mode=req.eco_mode)

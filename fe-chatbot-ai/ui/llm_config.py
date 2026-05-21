@@ -32,6 +32,11 @@ def _load() -> None:
         st.session_state.setdefault(f"llm_add_{p}", [])
 
 
+def _load_eco() -> bool:
+    cfg = api.get(f"{BACKEND}/admin/eco-config") or {}
+    return cfg.get("eco_mode", False)
+
+
 def render_llm_config() -> None:
     st.markdown(
         '<div style="color:#e2e8f0;font-size:1.05rem;font-weight:600;'
@@ -41,6 +46,54 @@ def render_llm_config() -> None:
 
     if "llm_order" not in st.session_state:
         _load()
+
+    if "eco_mode" not in st.session_state:
+        st.session_state["eco_mode"] = _load_eco()
+
+    # ── Eco Mode toggle ──────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="font-size:.75rem;color:#8b949e;letter-spacing:.07em;'
+        'margin-bottom:.4rem;margin-top:.25rem;">MODO AHORRO DE TOKENS (ECO)</div>',
+        unsafe_allow_html=True,
+    )
+    eco_col1, eco_col2 = st.columns([1, 4])
+    with eco_col1:
+        eco_val = st.toggle(
+            "Modo Eco",
+            value=st.session_state["eco_mode"],
+            key="eco_toggle",
+            label_visibility="collapsed",
+        )
+    with eco_col2:
+        if eco_val:
+            st.markdown(
+                '<span style="background:#1a3a1a;color:#4ade80;font-size:.75rem;'
+                'padding:.15rem .5rem;border-radius:5px;">'
+                'ECO — máximo 3 HU · 2 AC por HU · 2 escenarios por AC</span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<span style="color:#8b949e;font-size:.78rem;">'
+                'Generación completa sin límites de token</span>',
+                unsafe_allow_html=True,
+            )
+    if eco_val != st.session_state["eco_mode"]:
+        st.session_state["eco_mode"] = eco_val
+        payload = {"eco_mode": eco_val}
+        result = api.patch(f"{BACKEND}/admin/eco-config", payload)
+        if result is not None:
+            st.success(
+                f'Modo ECO {"activado" if eco_val else "desactivado"} correctamente.'
+            )
+        else:
+            st.error("Error al cambiar modo ECO")
+        st.rerun()
+
+    st.markdown(
+        '<hr style="border:none;border-top:1px solid #21262d;margin:.7rem 0;">',
+        unsafe_allow_html=True,
+    )
 
     models_map: dict = api.get(f"{BACKEND}/admin/llm-models") or {}
     order: list[str] = st.session_state["llm_order"]

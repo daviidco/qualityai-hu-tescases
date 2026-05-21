@@ -104,6 +104,14 @@ class QualityPipeline:
                 self._code_agent._settings = settings
             self._settings = settings
 
+    def set_eco_mode(self, eco_mode: bool) -> None:
+        """Cambia eco_mode en caliente sin reconstruir el pipeline."""
+        self._settings.eco_mode = eco_mode
+        self._req_agent._settings.eco_mode = eco_mode
+        self._test_agent._settings.eco_mode = eco_mode
+        if self._code_agent is not None:
+            self._code_agent._settings.eco_mode = eco_mode
+
     def run(
         self,
         requirement: str,

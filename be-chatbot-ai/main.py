@@ -78,6 +78,18 @@ async def lifespan(_app: FastAPI):
         except Exception as exc:
             print(f"⚠️  No se pudo restaurar config LLM: {exc}")
 
+    # ── Restaurar eco_mode desde MongoDB ──────────────────────────────────────
+    eco_doc = await db["eco_config"].find_one({"_id": "eco_config"})
+    if eco_doc:
+        eco_mode = eco_doc.get("eco_mode", False)
+        _app.state.pipeline.set_eco_mode(eco_mode)
+        os.environ["ECO_MODE"] = "true" if eco_mode else "false"
+        print(f"{'✅' if eco_mode else 'ℹ️ '} Eco mode: {'activado' if eco_mode else 'desactivado'}")
+    else:
+        # No hay config en MongoDB: respetar el valor del .env que ya tiene el pipeline
+        current = _app.state.pipeline._settings.eco_mode
+        print(f"{'✅' if current else 'ℹ️ '} Eco mode desde .env: {'activado' if current else 'desactivado'}")
+
     yield
 
 

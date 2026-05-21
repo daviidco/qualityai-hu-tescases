@@ -344,6 +344,12 @@ class LLMConfigV2Update(BaseModel):
     providers: dict[str, LLMProviderV2Update]
 
 
+# ── Eco Mode Config (admin) ──────────────────────────────────────────────────
+
+class EcoModeConfig(BaseModel):
+    eco_mode: bool = False
+
+
 # ── Jira export ───────────────────────────────────────────────────────────────
 
 class JiraTicketRef(BaseModel):
